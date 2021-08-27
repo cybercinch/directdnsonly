@@ -1,0 +1,8 @@
+environment: ''
+proxy_support: true
+log_level: debug
+log_to: file
+proxy_support_base: http://127.0.0.1
+server_port: 2222
+token_valid_for_days: 30
+timezone: Pacific/Auckland

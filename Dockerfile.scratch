@@ -1,0 +1,50 @@
+FROM python:3.7.9 as builder
+# Allow Passing Version from CI
+ARG VERSION
+ENV LC_ALL=en_NZ.utf8
+ENV LANG=en_NZ.utf8
+ENV APP_NAME="apikeyauthhandler"
+
+RUN mkdir -p /tmp/build && apt-get update && \
+    apt-get install -y libgcc1-dbg
+
+COPY src/ /tmp/build/
+COPY requirements.txt /tmp/build
+
+WORKDIR /tmp/build
+
+WORKDIR /tmp/src    
+RUN wget https://github.com/NixOS/patchelf/releases/download/0.12/patchelf-0.12.tar.bz2 && \
+    tar xvf patchelf-0.12.tar.bz2 && \
+    cd /tmp/src/patchelf-0.12* && \
+    ./configure --prefix="/usr" && \
+    make install
+
+WORKDIR /tmp/build
+RUN pip3 install -r requirements.txt && \
+    pyinstaller --hidden-import=json \
+    --hidden-import=jaraco \
+    --noconfirm --onefile ${APP_NAME}.py && \
+    cd /tmp/build/dist && \
+    staticx ${APP_NAME} ./${APP_NAME}_static
+
+RUN mkdir -p /tmp/approot && \
+    mkdir -p /tmp/approot/app && \
+    mkdir -p /tmp/approot/app/config && \
+    mkdir -p /tmp/approot/etc && \
+    mkdir -p /tmp/approot/tmp && \
+    mkdir -p /tmp/approot/data && \
+    mkdir -p /tmp/approot/lib/x86_64-linux-gnu && \
+    cp /tmp/build/config/app.yml /tmp/approot/app/config/app.yml && \
+    cp /tmp/build/dist/${APP_NAME}_static /tmp/approot/app/${APP_NAME} && \
+    cp /usr/lib/gcc/x86_64-linux-gnu/8/libgcc_s.so.1 /tmp/approot/lib/x86_64-linux-gnu/libgcc_s.so.1
+ 
+FROM scratch
+COPY --from=builder /tmp/approot /
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+ENV TZ=Pacific/Auckland
+WORKDIR /app
+
+VOLUME /app/config /data
+
+CMD ["/app/apikeyauthhandler"]

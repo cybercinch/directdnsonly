@@ -1,0 +1,16 @@
+FROM centos:latest
+ENV APP_NAME=rpmbuild
+ENV VERSION=latest
+
+RUN mkdir -p /tmp/build/rpm
+
+WORKDIR /tmp/build/rpm
+RUN dnf install -y --allowerasing gcc rpm-build rpm-devel \
+    rpmlint make bash coreutils \
+    diffutils patch rpmdevtools && \
+    dnf clean all && \
+    rm -Rf /var/dnf/cache && \
+    rpmdev-setuptree
+
+VOLUME /tmp/build/rpm
+CMD ["rpmbuild", "--define version ${VERSION}", "-bb", "${APP_NAME}.spec"]

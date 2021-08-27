@@ -1,0 +1,16 @@
+---
+# Port that the server will run on.
+server_port: 8080
+# Turn Proxy support on.  True if behind Traefik/Nginx for example
+proxy_support: True
+# Proxy support Base URI
+proxy_support_base: http://127.0.0.1
+# Values accepted are '', production, staging
+environment: ''
+api_keys:
+  - key: ZU7f3NogDxIzhfW5tsv9
+     name: super # Name of user
+     expires: never # Expiry never for superuser
+  - key: DhCIZ5yKjVN7ReKVh6Tl
+      name: jaydeep
+      expires: 21/11/2020, 10:56:24
