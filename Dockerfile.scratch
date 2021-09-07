@@ -3,10 +3,10 @@ FROM python:3.7.9 as builder
 ARG VERSION
 ENV LC_ALL=en_NZ.utf8
 ENV LANG=en_NZ.utf8
-ENV APP_NAME="apikeyauthhandler"
+ENV APP_NAME="directdnsonly"
 
 RUN mkdir -p /tmp/build && apt-get update && \
-    apt-get install -y libgcc1-dbg
+    apt-get install -y libgcc1-dbg libssl-dev
 
 COPY src/ /tmp/build/
 COPY requirements.txt /tmp/build
@@ -22,8 +22,13 @@ RUN wget https://github.com/NixOS/patchelf/releases/download/0.12/patchelf-0.12.
 
 WORKDIR /tmp/build
 RUN pip3 install -r requirements.txt && \
-    pyinstaller --hidden-import=json \
+    pyinstaller \
+    --hidden-import=json \
+    --hidden-import=pyopenssl \
     --hidden-import=jaraco \
+    --hidden-import=cheroot \
+    --hidden-import=cheroot.ssl.pyopenssl \
+    --hidden-import=cheroot.ssl.builtin \
     --noconfirm --onefile ${APP_NAME}.py && \
     cd /tmp/build/dist && \
     staticx ${APP_NAME} ./${APP_NAME}_static
@@ -47,4 +52,4 @@ WORKDIR /app
 
 VOLUME /app/config /data
 
-CMD ["/app/apikeyauthhandler"]
+CMD ["/app/directdnsonly"]
