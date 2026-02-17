@@ -1,6 +1,6 @@
 FROM pypy:slim-buster
 
-RUN mkdir -p /opt/apikeyhandler/config
+RUN mkdir -p /opt/apikeyhandler/conf
 VOLUME /opt/apikeyhandler/config
 
 COPY ./src/ /opt/apikeyhandler

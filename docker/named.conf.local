@@ -1,0 +1,4 @@
+zone "guise.nz" {
+    type master;
+    file "/etc/named/zones/dadns/guise.nz.db";
+};

@@ -1,0 +1,29 @@
+---
+timezone: Pacific/Auckland
+log_level: INFO
+queue_location: ./data/queues
+
+dns:
+  # default_backend: coredns_mysql
+  backends:
+    bind_backend:
+      type: bind
+      enabled: false
+      zones_dir: /etc/named/zones/dadns
+      named_conf: /etc/bind/named.conf.local
+    coredns_primary:
+      enabled: true
+      host: "mysql"  # Matches Docker service name
+      port: 3306
+      database: "coredns"
+      username: "coredns"
+      password: "coredns123"
+      table_name: "records"
+    coredns_secondary:
+      enabled: false
+      host: "mysql"  # Matches Docker service name
+      port: 3306
+      database: "coredns"
+      username: "coredns"
+      password: "coredns123"
+      table_name: "records"

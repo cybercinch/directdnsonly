@@ -1,48 +1,52 @@
-version: '3.7'
-services:
-  app:
-    image: registry.dockerprod.ultrafast.co.nz/uff/apikeyhandler:0.10
-    networks:
-      - traefik-net
-    volumes:
-      - /etc/localtime:/etc/localtime:ro # Mount Timezone config to container
-      - /data/swarm-vols/apikeyhandler:/opt/apikeyhandler/config # Store Config on Persistent drive shared between nodes
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == worker # Place this service on Worker Nodes alternatively may specify manager if you want service on manager node.
-      labels:
-        - "traefik.http.routers.apikeyauth.rule=Host(`apiauth-internal.dockertest.ultrafast.co.nz`)" # This label creates a route Traefik will listen on
-        - "traefik.http.routers.apikeyauth.tls=true" # Enable TLS,  in this example using default TLS cert
-        - "traefik.http.services.apikeyauth.loadbalancer.server.port=8080" # Set Port to proxy
-        - "traefik.enable=true" # This flag enables load balancing through Traefik :)
-        - "traefik.docker.network=traefik-net" # Set the network to connect to container on
-        - "traefik.http.middlewares.apikeyauth.forwardauth.address=https://apiauth-internal.dockertest.ultrafast.co.nz"
-        - "traefik.http.middlewares.apikeyauth.forwardauth.trustForwardHeader=true"
-        - "traefik.http.middlewares.apikeyauth.forwardauth.authResponseHeaders=X-Client-Id"
-        - "traefik.http.middlewares.apikeyauth.forwardauth.tls.insecureSkipVerify=true"
-  test_app:
-    image: containous/whoami
-    networks:
-      - traefik-net
-    volumes:
-      - /etc/localtime:/etc/localtime:ro # Mount Timezone config to container
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-          - node.role == worker # Place this service on Worker Nodes alternatively may specify manager if you want service on manager node.
-      labels:
-        - "traefik.http.routers.testapp.rule=Host(`testapp.dockertest.ultrafast.co.nz`)" # This label creates a route Traefik will listen on
-        - "traefik.http.routers.testapp.tls=true" # Enable TLS,  in this example using default TLS cert
-        - "traefik.http.routers.testapp.middlewares=apikeyauth"
-        - "traefik.http.services.testapp.loadbalancer.server.port=80" # Set Port to proxy
-        - "traefik.enable=true" # This flag enables load balancing through Traefik :)
-        - "traefik.docker.network=traefik-net" # Set the network to connect to container on
+version: '3.8'
 
-networks:
-  traefik-net:
-    external: true
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: dadns_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: coredns
+      MYSQL_USER: coredns
+      MYSQL_PASSWORD: coredns123
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./schema/coredns_mysql.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dadns:
+    build:
+      dockerfile: Dockerfile.deepseek
+      context: .
+      no_cache: false
+    container_name: dadns_app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "2222:2222"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - TZ=Pacific/Auckland
+      - DNS_BACKENDS__BIND__ENABLED=true
+      - DNS_BACKENDS__BIND__ZONES_DIR=/etc/named/zones/dadns
+      - DNS_BACKENDS__BIND__NAMED_CONF=/etc/bind/named.conf.local
+      - DNS_BACKENDS__COREDNS_MYSQL__ENABLED=true
+      - DNS_BACKENDS__COREDNS_MYSQL__HOST=mysql
+      - DNS_BACKENDS__COREDNS_MYSQL__PORT=3306
+      - DNS_BACKENDS__COREDNS_MYSQL__DATABASE=coredns
+      - DNS_BACKENDS__COREDNS_MYSQL__USERNAME=coredns
+      - DNS_BACKENDS__COREDNS_MYSQL__PASSWORD=coredns123
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

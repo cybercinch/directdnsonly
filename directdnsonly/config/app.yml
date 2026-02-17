@@ -1,0 +1,35 @@
+---
+timezone: Pacific/Auckland
+log_level: INFO
+queue_location: ./data/queues
+
+app:
+  auth_username: directdnsonly
+  auth_password: changeme  # Override via DADNS_APP_AUTH_PASSWORD env var
+
+dns:
+  default_backend: bind
+  backends:
+    bind:
+      type: bind
+      enabled: true
+      zones_dir: ./data/zones
+      named_conf: ./data/named.conf.include
+    coredns_dc1:
+      type: coredns_mysql
+      enabled: true
+      host: "mysql-dc1"
+      port: 3306
+      database: "coredns"
+      username: "coredns"
+      password: "coredns123"
+      table_name: "records"
+    coredns_dc2:
+      type: coredns_mysql
+      enabled: true
+      host: "mysql-dc2"
+      port: 3306
+      database: "coredns"
+      username: "coredns"
+      password: "coredns123"
+      table_name: "records"
