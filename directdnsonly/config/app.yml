@@ -7,6 +7,25 @@ app:
   auth_username: directdnsonly
   auth_password: changeme  # Override via DADNS_APP_AUTH_PASSWORD env var
 
+# Reconciliation poller — queries each DA server and removes orphaned zones
+# Disabled by default. Only touches zones registered via DaDNS (in our DB).
+# If a DA server is unreachable, that server is skipped entirely.
+#reconciliation:
+#  enabled: true
+#  interval_minutes: 60
+#  verify_ssl: true          # set false for self-signed DA certs
+#  directadmin_servers:
+#    - hostname: da1.example.com
+#      port: 2222
+#      username: admin
+#      password: secret
+#      ssl: true
+#    - hostname: da2.example.com
+#      port: 2222
+#      username: admin
+#      password: secret
+#      ssl: true
+
 dns:
   default_backend: bind
   backends:

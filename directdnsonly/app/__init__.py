@@ -1,6 +1,6 @@
 from loguru import logger
 import sys
-from config import config
+from directdnsonly.config import config
 
 
 def configure_logging():

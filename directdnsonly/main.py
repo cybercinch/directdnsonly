@@ -37,8 +37,11 @@ def main():
         logger.info("Database Connected!")
 
         # Setup worker manager
+        reconciliation_config = config.get("reconciliation") or {}
         worker_manager = WorkerManager(
-            queue_path=config.get("queue_location"), backend_registry=registry
+            queue_path=config.get("queue_location"),
+            backend_registry=registry,
+            reconciliation_config=reconciliation_config,
         )
         worker_manager.start()
         logger.info(

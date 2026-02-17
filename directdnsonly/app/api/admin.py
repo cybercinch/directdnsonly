@@ -1,6 +1,12 @@
 import cherrypy
 from urllib.parse import urlencode, parse_qs
 from loguru import logger
+from directdnsonly.app.utils import (
+    check_zone_exists,
+    check_parent_domain_owner,
+    get_domain_record,
+    get_parent_domain_record,
+)
 from directdnsonly.app.utils.zone_parser import validate_and_normalize_zone
 
 
@@ -15,9 +21,17 @@ class DNSAdminAPI:
         return "DNS Admin API - Available endpoints: /CMD_API_DNS_ADMIN"
 
     @cherrypy.expose
+    def CMD_API_LOGIN_TEST(self):
+        """DirectAdmin login test — confirms credentials are valid"""
+        return urlencode({"error": 0, "text": "Login OK"})
+
+    @cherrypy.expose
     def CMD_API_DNS_ADMIN(self, **params):
         """Handle both DirectAdmin-style API calls and raw zone file uploads"""
         try:
+            if cherrypy.request.method == "GET":
+                return self._handle_exists(params)
+
             if cherrypy.request.method != "POST":
                 cherrypy.response.status = 405
                 return urlencode({"error": 1, "text": "Method not allowed"})
@@ -76,6 +90,42 @@ class DNSAdminAPI:
             logger.error(f"API error: {str(e)}")
             cherrypy.response.status = 400
             return urlencode({"error": 1, "text": str(e)})
+
+    def _handle_exists(self, params: dict):
+        """Handle GET action=exists — domain and optional parent domain lookup"""
+        action = params.get("action")
+        if action != "exists":
+            cherrypy.response.status = 400
+            return urlencode({"error": 1, "text": f"Unsupported GET action: {action}"})
+
+        domain = params.get("domain")
+        if not domain:
+            cherrypy.response.status = 400
+            return urlencode({"error": 1, "text": "Missing 'domain' parameter"})
+
+        check_parent = bool(params.get("check_for_parent_domain"))
+
+        domain_exists = check_zone_exists(domain)
+        parent_exists = check_parent_domain_owner(domain) if check_parent else False
+
+        if not domain_exists and not parent_exists:
+            return urlencode({"error": 0, "exists": 0})
+
+        if domain_exists:
+            record = get_domain_record(domain)
+            return urlencode({
+                "error": 0,
+                "exists": 1,
+                "details": f"Domain exists on {record.hostname}",
+            })
+
+        # parent match only
+        parent_record = get_parent_domain_record(domain)
+        return urlencode({
+            "error": 0,
+            "exists": 2,
+            "details": f"Parent Domain exists on {parent_record.hostname}",
+        })
 
     def _handle_rawsave(self, domain: str, params: dict):
         """Process zone file saves"""

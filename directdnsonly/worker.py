@@ -10,14 +10,18 @@ from app.utils import check_zone_exists, put_zone_index
 from app.utils.zone_parser import count_zone_records
 from directdnsonly.app.db.models import Domain
 from directdnsonly.app.db import connect
+from directdnsonly.app.reconciler import ReconciliationWorker
 
 
 class WorkerManager:
-    def __init__(self, queue_path: str, backend_registry):
+    def __init__(self, queue_path: str, backend_registry, reconciliation_config: dict = None):
         self.queue_path = queue_path
         self.backend_registry = backend_registry
         self._running = False
-        self._thread = None
+        self._save_thread = None
+        self._delete_thread = None
+        self._reconciler = None
+        self._reconciliation_config = reconciliation_config or {}
 
         # Initialize queues with error handling
         try:
@@ -146,6 +150,113 @@ class WorkerManager:
         except Exception as e:
             logger.error(f"Error in {backend_name}: {str(e)}")
 
+    def _process_delete_queue(self):
+        """Worker loop for processing zone deletion requests"""
+        logger.info("Delete queue worker started")
+        session = connect()
+
+        while self._running:
+            try:
+                item = self.delete_queue.get(block=True, timeout=5)
+                domain = item.get("domain")
+                hostname = item.get("hostname", "")
+
+                logger.debug(f"Processing delete for {domain}")
+
+                record = session.query(Domain).filter_by(domain=domain).first()
+                if not record:
+                    logger.warning(
+                        f"Domain {domain} not found in DB — skipping delete"
+                    )
+                    self.delete_queue.task_done()
+                    continue
+
+                if record.hostname and record.hostname != hostname:
+                    logger.warning(
+                        f"Hostname mismatch for {domain}: registered on "
+                        f"{record.hostname}, delete requested from {hostname} — rejected"
+                    )
+                    self.delete_queue.task_done()
+                    continue
+                if not record.hostname:
+                    logger.warning(
+                        f"No origin hostname stored for {domain} — "
+                        f"skipping ownership check, proceeding with delete"
+                    )
+
+                session.delete(record)
+                session.commit()
+                logger.info(f"Removed {domain} from database")
+
+                remaining_domains = [d.domain for d in session.query(Domain).all()]
+
+                backends = self.backend_registry.get_available_backends()
+                if not backends:
+                    logger.warning(
+                        f"No active backends — {domain} removed from DB only"
+                    )
+                elif len(backends) > 1:
+                    self._process_backends_delete_parallel(
+                        backends, domain, remaining_domains
+                    )
+                else:
+                    for backend_name, backend in backends.items():
+                        self._delete_single_backend(
+                            backend_name, backend, domain, remaining_domains
+                        )
+
+                self.delete_queue.task_done()
+                logger.success(f"Delete completed for {domain}")
+
+            except Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Unexpected delete worker error: {e}")
+                time.sleep(1)
+
+    def _delete_single_backend(self, backend_name, backend, domain, remaining_domains):
+        """Delete a zone from a single backend"""
+        try:
+            if backend.delete_zone(domain):
+                logger.debug(f"Deleted {domain} from {backend_name}")
+                if backend.get_name() == "bind":
+                    backend.update_named_conf(remaining_domains)
+                    backend.reload_zone()
+                else:
+                    backend.reload_zone(zone_name=domain)
+            else:
+                logger.error(f"Failed to delete {domain} from {backend_name}")
+        except Exception as e:
+            logger.error(f"Error deleting {domain} from {backend_name}: {e}")
+
+    def _process_backends_delete_parallel(self, backends, domain, remaining_domains):
+        """Delete a zone from multiple backends in parallel"""
+        start_time = time.monotonic()
+        with ThreadPoolExecutor(
+            max_workers=len(backends),
+            thread_name_prefix="backend_del",
+        ) as executor:
+            futures = {
+                executor.submit(
+                    self._delete_single_backend,
+                    backend_name, backend, domain, remaining_domains
+                ): backend_name
+                for backend_name, backend in backends.items()
+            }
+            for future in as_completed(futures):
+                backend_name = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(
+                        f"Unhandled error deleting from {backend_name}: {e}"
+                    )
+        elapsed = (time.monotonic() - start_time) * 1000
+        logger.debug(
+            f"Parallel delete of {domain} across "
+            f"{len(backends)} backends completed in {elapsed:.0f}ms"
+        )
+
     def _process_backends_parallel(self, backends, item, session):
         """Process zone updates across multiple backends in parallel"""
         start_time = time.monotonic()
@@ -260,17 +371,33 @@ class WorkerManager:
             return
 
         self._running = True
-        self._thread = threading.Thread(
+        self._save_thread = threading.Thread(
             target=self._process_save_queue, daemon=True, name="save_queue_worker"
         )
-        self._thread.start()
-        logger.info(f"Started worker thread {self._thread.name}")
+        self._delete_thread = threading.Thread(
+            target=self._process_delete_queue, daemon=True, name="delete_queue_worker"
+        )
+        self._save_thread.start()
+        self._delete_thread.start()
+        logger.info(
+            f"Started worker threads: {self._save_thread.name}, {self._delete_thread.name}"
+        )
+
+        self._reconciler = ReconciliationWorker(
+            delete_queue=self.delete_queue,
+            reconciliation_config=self._reconciliation_config,
+        )
+        self._reconciler.start()
 
     def stop(self):
         """Stop background workers gracefully"""
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=5)
+        if self._reconciler:
+            self._reconciler.stop()
+        if self._save_thread:
+            self._save_thread.join(timeout=5)
+        if self._delete_thread:
+            self._delete_thread.join(timeout=5)
         logger.info("Workers stopped")
 
     def queue_status(self):
@@ -278,5 +405,7 @@ class WorkerManager:
         return {
             "save_queue_size": self.save_queue.qsize(),
             "delete_queue_size": self.delete_queue.qsize(),
-            "worker_alive": self._thread and self._thread.is_alive(),
+            "save_worker_alive": self._save_thread and self._save_thread.is_alive(),
+            "delete_worker_alive": self._delete_thread and self._delete_thread.is_alive(),
+            "reconciler_alive": self._reconciler.is_alive if self._reconciler else False,
         }

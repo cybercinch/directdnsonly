@@ -52,6 +52,11 @@ def load_config() -> Vyper:
     v.set_default("datastore.port", 3306)
     v.set_default("datastore.db_location", "data/directdns.db")
 
+    # Reconciliation poller defaults
+    v.set_default("reconciliation.enabled", False)
+    v.set_default("reconciliation.interval_minutes", 60)
+    v.set_default("reconciliation.verify_ssl", True)
+
     # Read configuration
     if not v.read_in_config():
         logger.warning("No config file found, using defaults")
