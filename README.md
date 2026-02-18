@@ -1,4 +1,138 @@
-# DaDNS - DNS Management System
+# DirectDNSOnly - DNS Management System
+
+## Deployment Topologies
+
+Two reference topologies are documented below. Choose the one that matches your infrastructure.
+
+---
+
+### Topology A — Dual BIND Instances (High-Availability / Multi-Server)
+
+Two independent DirectDNSOnly containers, each running a bundled BIND9 instance. Both are registered as Extra DNS servers in the same DirectAdmin Multi-Server environment, so DA pushes every zone change to both simultaneously.
+
+```
+DirectAdmin Multi-Server
+        │
+        ├─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-1  (container, BIND backend)
+        │                                     │
+        │                               writes zone file
+        │                               reloads named
+        │                               (serves authoritative DNS on :53)
+        │
+        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-2  (container, BIND backend)
+                                               │
+                                         writes zone file
+                                         reloads named
+                                         (serves authoritative DNS on :53)
+```
+
+**Each instance is completely independent** — no shared state, no cross-talk. Redundancy comes from DA pushing to both. If one container goes down, DA continues to push to the other.
+
+#### `config/app.yml` — instance 1
+
+```yaml
+app:
+  auth_username: directdnsonly
+  auth_password: your-secret
+
+dns:
+  default_backend: bind
+  backends:
+    bind:
+      type: bind
+      enabled: true
+      zones_dir: /etc/named/zones
+      named_conf: /etc/bind/named.conf.local
+```
+
+#### `docker-compose.yml` sketch — instance 1
+
+```yaml
+services:
+  directdnsonly-1:
+    image: guisea/directdnsonly:2.0.0
+    ports:
+      - "2222:2222"   # DA pushes here
+      - "53:53/udp"   # authoritative DNS
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+```
+
+Register both containers as separate Extra DNS entries in DA → DNS Administration → Extra DNS Servers, with the same credentials configured in each `config/app.yml`.
+
+---
+
+### Topology B — Single Instance, Dual CoreDNS MySQL Backends (Multi-DC)
+
+One DirectDNSOnly instance receives zone pushes from DirectAdmin and fans out to two (or more) CoreDNS MySQL databases in parallel. CoreDNS servers in each data centre read from their local database. The directdnsonly instance is the sole write path — it does **not** serve DNS itself.
+
+```
+DirectAdmin
+        │
+        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly  (single container)
+                                                │
+                                     Persistent Queue (survive restarts)
+                                                │
+                                     ThreadPoolExecutor (one thread per backend)
+                                         │               │
+                                         ▼               ▼
+                               coredns_mysql_primary   coredns_mysql_secondary
+                               (MySQL DC1 10.0.0.80)   (MySQL DC2 10.0.1.29)
+                                         │               │
+                                         ▼               ▼
+                                  CoreDNS (DC1)    CoreDNS (DC2)
+                               serves :53 from DB  serves :53 from DB
+```
+
+Both MySQL backends are written **concurrently** within the same zone update. A slow or unreachable secondary does not block the primary write. Per-backend record verification runs after each write.
+
+#### `config/app.yml`
+
+```yaml
+app:
+  auth_username: directdnsonly
+  auth_password: your-secret
+
+dns:
+  default_backend: coredns_mysql_primary
+  backends:
+    coredns_mysql_primary:
+      type: coredns_mysql
+      enabled: true
+      host: 10.0.0.80
+      port: 3306
+      database: coredns
+      username: coredns
+      password: your-db-password
+
+    coredns_mysql_secondary:
+      type: coredns_mysql
+      enabled: true
+      host: 10.0.1.29
+      port: 3306
+      database: coredns
+      username: coredns
+      password: your-db-password
+```
+
+Adding a third data centre is a single stanza in the config — no code changes required.
+
+---
+
+### Topology Comparison
+
+| | Topology A — Dual BIND | Topology B — CoreDNS MySQL |
+|---|---|---|
+| DNS server | BIND9 (bundled in container) | CoreDNS (separate, reads MySQL) |
+| Redundancy | Two independent app+DNS units | One app, N MySQL replicas |
+| Zone storage | Zone files on container disk | MySQL database rows |
+| DA registration | Two Extra DNS server entries | One Extra DNS server entry |
+| Failure mode | One container can go down | MySQL connectivity required |
+| Horizontal scaling | Add more DA Extra DNS entries | Add more MySQL backends in config |
+| Best for | Simple HA, no external DB | Multi-DC, existing CoreDNS fleet |
+
+---
 
 ## Features
 - Multi-backend DNS management (BIND, CoreDNS MySQL)
@@ -16,7 +150,7 @@
 
 ## Concurrent Multi-Backend Processing
 
-DaDNS propagates every zone update to all enabled backends in parallel using a
+DirectDNSOnly propagates every zone update to all enabled backends in parallel using a
 queue-based worker architecture.
 
 ### Architecture

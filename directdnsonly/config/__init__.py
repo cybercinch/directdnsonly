@@ -10,10 +10,12 @@ from typing import Any, Dict
 def load_config() -> Vyper:
     # Initialize Vyper
     v.set_config_name("app")  # Looks for app.yaml/app.yml
-    # Bundled config colocated with this module (always present in the package)
+    # User-supplied paths checked first so they override the bundled defaults
+    v.add_config_path("/etc/directdnsonly")  # system-level mount
+    v.add_config_path(".")                   # CWD (e.g. /app when run directly)
+    v.add_config_path("./config")            # docker-compose volume mount at /app/config
+    # Bundled config colocated with this module — last-resort fallback
     v.add_config_path(str(Path(__file__).parent))
-    v.add_config_path(".")  # Search in current directory
-    v.add_config_path("./config")
     v.set_env_prefix("DADNS")
     v.set_env_key_replacer("_", ".")
     v.automatic_env()
