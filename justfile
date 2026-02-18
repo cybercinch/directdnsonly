@@ -83,7 +83,9 @@ build:
         --hidden-import=cheroot.ssl.pyopenssl \
         --hidden-import=cheroot.ssl.builtin \
         --noconfirm --onefile \
+        --name=directdnsonly \
         directdnsonly/main.py
+    rm -f *.spec
 
 # ---------------------------------------------------------------------------
 # Clean
