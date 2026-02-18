@@ -27,6 +27,8 @@ class ReconciliationWorker:
         self.interval_seconds = reconciliation_config.get("interval_minutes", 60) * 60
         self.servers = reconciliation_config.get("directadmin_servers") or []
         self.verify_ssl = reconciliation_config.get("verify_ssl", True)
+        self.ipp = int(reconciliation_config.get("ipp", 1000))
+        self.dry_run = bool(reconciliation_config.get("dry_run", False))
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -46,11 +48,16 @@ class ReconciliationWorker:
         )
         self._thread.start()
         server_names = [s.get("hostname", "?") for s in self.servers]
+        mode = "DRY-RUN" if self.dry_run else "LIVE"
         logger.info(
-            f"Reconciliation poller started — "
+            f"Reconciliation poller started [{mode}] — "
             f"interval: {self.interval_seconds // 60}m, "
             f"servers: {server_names}"
         )
+        if self.dry_run:
+            logger.warning(
+                "[reconciler] DRY-RUN mode active — orphans will be logged but NOT queued for deletion"
+            )
 
     def stop(self):
         self._stop_event.set()
@@ -93,6 +100,7 @@ class ReconciliationWorker:
                     server.get("username"),
                     server.get("password"),
                     server.get("ssl", True),
+                    ipp=self.ipp,
                 )
                 if da_domains is not None:
                     for d in da_domains:
@@ -107,97 +115,67 @@ class ReconciliationWorker:
 
         # Now check local DB for all domains, update master if needed, and queue deletes only from recorded master
         session = connect()
-        all_local_domains = session.query(Domain).all()
-        migrated = 0
-        for record in all_local_domains:
-            domain = record.domain
-            recorded_master = record.hostname
-            actual_master = all_da_domains.get(domain)
-            if actual_master:
-                if actual_master != recorded_master:
-                    logger.warning(
-                        f"[reconciler] Domain '{domain}' migrated: recorded master '{recorded_master}' -> new master '{actual_master}'. Updating local DB."
-                    )
-                    record.hostname = actual_master
-                    migrated += 1
-            else:
-                # Only queue delete if this is the recorded master
-                if recorded_master in [s.get("hostname") for s in self.servers]:
-                    self.delete_queue.put({
-                        "domain": record.domain,
-                        "hostname": record.hostname,
-                        "username": record.username or "",
-                        "source": "reconciler",
-                    })
-                    logger.debug(
-                        f"[reconciler] Queued delete for orphan: {record.domain} (master: {recorded_master})"
-                    )
-                    total_queued += 1
-        if migrated:
-            session.commit()
-            logger.info(f"[reconciler] {migrated} domain(s) migrated to new master and updated in DB.")
-        logger.info(
-            f"[reconciler] Reconciliation pass complete — "
-            f"{total_queued} domain(s) queued for deletion"
-        )
-
-    def _reconcile_server(self, server: dict) -> int:
-        """Reconcile one DA server. Returns number of domains queued for delete."""
-        hostname = server["hostname"]
-        port = server.get("port", 2222)
-        username = server.get("username")
-        password = server.get("password")
-        use_ssl = server.get("ssl", True)
-
-        logger.info(f"[reconciler] Polling {hostname}:{port}")
-
-        da_domains = self._fetch_da_domains(
-            hostname, port, username, password, use_ssl
-        )
-        if da_domains is None:
-            # Fetch failed — never delete on uncertainty
-            return 0
-
-        logger.debug(
-            f"[reconciler] {hostname}: {len(da_domains)} active domain(s) in DA"
-        )
-
-        session = connect()
-        our_domains = session.query(Domain).filter_by(hostname=hostname).all()
-
-        if not our_domains:
-            logger.debug(
-                f"[reconciler] {hostname}: no domains registered from this server"
-            )
-            return 0
-
-        orphans = [d for d in our_domains if d.domain not in da_domains]
-
-        if not orphans:
+        try:
+            all_local_domains = session.query(Domain).all()
+            migrated = 0
+            backfilled = 0
+            known_servers = {s.get("hostname") for s in self.servers}
+            for record in all_local_domains:
+                domain = record.domain
+                recorded_master = record.hostname
+                actual_master = all_da_domains.get(domain)
+                if actual_master:
+                    if not recorded_master:
+                        logger.info(
+                            f"[reconciler] Domain '{domain}' hostname backfilled: '{actual_master}'"
+                        )
+                        record.hostname = actual_master
+                        backfilled += 1
+                    elif actual_master != recorded_master:
+                        logger.warning(
+                            f"[reconciler] Domain '{domain}' migrated: "
+                            f"'{recorded_master}' -> '{actual_master}'. Updating local DB."
+                        )
+                        record.hostname = actual_master
+                        migrated += 1
+                else:
+                    # Only act if the recorded master is one we're polling
+                    if recorded_master in known_servers:
+                        if self.dry_run:
+                            logger.warning(
+                                f"[reconciler] [DRY-RUN] Would delete orphan: {record.domain} "
+                                f"(master: {recorded_master})"
+                            )
+                        else:
+                            self.delete_queue.put({
+                                "domain": record.domain,
+                                "hostname": record.hostname,
+                                "username": record.username or "",
+                                "source": "reconciler",
+                            })
+                            logger.debug(
+                                f"[reconciler] Queued delete for orphan: {record.domain} "
+                                f"(master: {recorded_master})"
+                            )
+                        total_queued += 1
+            if migrated or backfilled:
+                session.commit()
+                if backfilled:
+                    logger.info(f"[reconciler] {backfilled} domain(s) had missing hostname backfilled.")
+                if migrated:
+                    logger.info(f"[reconciler] {migrated} domain(s) migrated to new master.")
+        finally:
+            session.close()
+        if self.dry_run:
             logger.info(
-                f"[reconciler] {hostname}: all {len(our_domains)} registered "
-                f"domain(s) confirmed active in DA"
+                f"[reconciler] Reconciliation pass complete [DRY-RUN] — "
+                f"{total_queued} orphan(s) identified (none deleted)"
             )
-            return 0
-
-        logger.warning(
-            f"[reconciler] {hostname}: {len(orphans)} orphaned domain(s) "
-            f"no longer in DA — queuing for deletion: "
-            f"{[d.domain for d in orphans]}"
-        )
-
-        for record in orphans:
-            self.delete_queue.put({
-                "domain": record.domain,
-                "hostname": record.hostname,
-                "username": record.username or "",
-                "source": "reconciler",
-            })
-            logger.debug(
-                f"[reconciler] Queued delete for orphan: {record.domain}"
+        else:
+            logger.info(
+                f"[reconciler] Reconciliation pass complete — "
+                f"{total_queued} domain(s) queued for deletion"
             )
-
-        return len(orphans)
 
     def _fetch_da_domains(
         self, hostname: str, port: int, username: str, password: str, use_ssl: bool, ipp: int = 1000
@@ -265,7 +243,10 @@ class ReconciliationWorker:
                     total_pages = int(info.get("total_pages", 1))
                     page += 1
                     continue
-                except Exception:
+                except Exception as e:
+                    logger.error(
+                        f"[reconciler] JSON decode failed for {hostname}:{port} page {page}: {e}\nRaw response: {response.text[:500]}"
+                    )
                     # Fallback to legacy parser
                     domains = self._parse_da_domain_list(response.text)
                     all_domains.update(domains)

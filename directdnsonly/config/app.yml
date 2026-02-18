@@ -12,8 +12,10 @@ app:
 # If a DA server is unreachable, that server is skipped entirely.
 #reconciliation:
 #  enabled: true
+#  dry_run: true             # log orphans but do NOT queue deletes — safe first-run mode
 #  interval_minutes: 60
 #  verify_ssl: true          # set false for self-signed DA certs
+#  ipp: 1000                 # items per page when polling DA (default 1000)
 #  directadmin_servers:
 #    - hostname: da1.example.com
 #      port: 2222

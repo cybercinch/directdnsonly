@@ -10,6 +10,8 @@ from typing import Any, Dict
 def load_config() -> Vyper:
     # Initialize Vyper
     v.set_config_name("app")  # Looks for app.yaml/app.yml
+    # Bundled config colocated with this module (always present in the package)
+    v.add_config_path(str(Path(__file__).parent))
     v.add_config_path(".")  # Search in current directory
     v.add_config_path("./config")
     v.set_env_prefix("DADNS")
@@ -54,11 +56,15 @@ def load_config() -> Vyper:
 
     # Reconciliation poller defaults
     v.set_default("reconciliation.enabled", False)
+    v.set_default("reconciliation.dry_run", False)
     v.set_default("reconciliation.interval_minutes", 60)
     v.set_default("reconciliation.verify_ssl", True)
 
     # Read configuration
-    if not v.read_in_config():
+    try:
+        if not v.read_in_config():
+            logger.warning("No config file found, using defaults")
+    except Exception:
         logger.warning("No config file found, using defaults")
 
     return v

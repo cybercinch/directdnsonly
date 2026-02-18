@@ -184,29 +184,60 @@ class WorkerManager:
                         f"skipping ownership check, proceeding with delete"
                     )
 
-                session.delete(record)
-                session.commit()
-                logger.info(f"Removed {domain} from database")
-
-                remaining_domains = [d.domain for d in session.query(Domain).all()]
-
                 backends = self.backend_registry.get_available_backends()
+                remaining_domains = [d.domain for d in session.query(Domain).all()]
+                delete_success = True
                 if not backends:
                     logger.warning(
-                        f"No active backends — {domain} removed from DB only"
+                        f"No active backends — {domain} will be removed from DB only"
                     )
                 elif len(backends) > 1:
-                    self._process_backends_delete_parallel(
-                        backends, domain, remaining_domains
-                    )
+                    # Parallel delete, track failures
+                    results = []
+                    def delete_backend_wrapper(backend_name, backend, domain, remaining_domains):
+                        try:
+                            return backend.delete_zone(domain)
+                        except Exception as e:
+                            logger.error(f"Error deleting {domain} from {backend_name}: {e}")
+                            return False
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    with ThreadPoolExecutor(max_workers=len(backends)) as executor:
+                        futures = {
+                            executor.submit(delete_backend_wrapper, backend_name, backend, domain, remaining_domains): backend_name
+                            for backend_name, backend in backends.items()
+                        }
+                        for future in as_completed(futures):
+                            backend_name = futures[future]
+                            try:
+                                result = future.result()
+                                results.append(result)
+                                if not result:
+                                    logger.error(f"Failed to delete {domain} from {backend_name}")
+                            except Exception as e:
+                                logger.error(f"Unhandled error deleting from {backend_name}: {e}")
+                                results.append(False)
+                    delete_success = all(results)
                 else:
+                    # Single backend
                     for backend_name, backend in backends.items():
-                        self._delete_single_backend(
-                            backend_name, backend, domain, remaining_domains
-                        )
+                        try:
+                            result = backend.delete_zone(domain)
+                            if not result:
+                                logger.error(f"Failed to delete {domain} from {backend_name}")
+                                delete_success = False
+                        except Exception as e:
+                            logger.error(f"Error deleting {domain} from {backend_name}: {e}")
+                            delete_success = False
 
-                self.delete_queue.task_done()
-                logger.success(f"Delete completed for {domain}")
+                if delete_success:
+                    session.delete(record)
+                    session.commit()
+                    logger.info(f"Removed {domain} from database")
+                    self.delete_queue.task_done()
+                    logger.success(f"Delete completed for {domain}")
+                else:
+                    logger.error(f"Delete failed for {domain} on one or more backends — DB record retained")
+                    self.delete_queue.task_done()
 
             except Empty:
                 continue
