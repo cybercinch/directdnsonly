@@ -28,7 +28,6 @@ RUN pip install "poetry==2.1.2"  # Adjust version to match your lock file
 
 # Copy application files
 COPY directdnsonly ./directdnsonly
-COPY config ./config
 COPY schema ./schema
 
 RUN poetry config virtualenvs.create false && \
