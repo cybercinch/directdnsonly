@@ -1,4 +1,5 @@
 """Tests for directdnsonly.app.reconciler — ReconciliationWorker."""
+
 import pytest
 import requests.exceptions
 from queue import Queue
@@ -12,7 +13,13 @@ from directdnsonly.app.db.models import Domain
 # Fixtures
 # ---------------------------------------------------------------------------
 
-SERVER = {"hostname": "da1.example.com", "port": 2222, "username": "admin", "password": "secret", "ssl": True}
+SERVER = {
+    "hostname": "da1.example.com",
+    "port": 2222,
+    "username": "admin",
+    "password": "secret",
+    "ssl": True,
+}
 
 BASE_CONFIG = {
     "enabled": True,
@@ -46,7 +53,9 @@ def dry_run_worker(delete_queue):
 
 
 def test_orphan_queued_when_domain_missing_from_da(worker, delete_queue, patch_connect):
-    patch_connect.add(Domain(domain="orphan.com", hostname="da1.example.com", username="admin"))
+    patch_connect.add(
+        Domain(domain="orphan.com", hostname="da1.example.com", username="admin")
+    )
     patch_connect.commit()
 
     with patch.object(worker, "_fetch_da_domains", return_value=set()):
@@ -59,7 +68,9 @@ def test_orphan_queued_when_domain_missing_from_da(worker, delete_queue, patch_c
 
 
 def test_orphan_not_queued_in_dry_run(dry_run_worker, delete_queue, patch_connect):
-    patch_connect.add(Domain(domain="orphan.com", hostname="da1.example.com", username="admin"))
+    patch_connect.add(
+        Domain(domain="orphan.com", hostname="da1.example.com", username="admin")
+    )
     patch_connect.commit()
 
     with patch.object(dry_run_worker, "_fetch_da_domains", return_value=set()):
@@ -70,7 +81,9 @@ def test_orphan_not_queued_in_dry_run(dry_run_worker, delete_queue, patch_connec
 
 def test_orphan_not_queued_for_unknown_server(worker, delete_queue, patch_connect):
     """Domains whose recorded master is NOT in our configured servers are skipped."""
-    patch_connect.add(Domain(domain="other.com", hostname="da99.unknown.com", username="admin"))
+    patch_connect.add(
+        Domain(domain="other.com", hostname="da99.unknown.com", username="admin")
+    )
     patch_connect.commit()
 
     with patch.object(worker, "_fetch_da_domains", return_value=set()):
@@ -80,7 +93,9 @@ def test_orphan_not_queued_for_unknown_server(worker, delete_queue, patch_connec
 
 
 def test_active_domain_not_queued(worker, delete_queue, patch_connect):
-    patch_connect.add(Domain(domain="good.com", hostname="da1.example.com", username="admin"))
+    patch_connect.add(
+        Domain(domain="good.com", hostname="da1.example.com", username="admin")
+    )
     patch_connect.commit()
 
     with patch.object(worker, "_fetch_da_domains", return_value={"good.com"}):
@@ -106,7 +121,9 @@ def test_backfill_null_hostname(worker, patch_connect):
 
 
 def test_migration_updates_hostname(worker, patch_connect):
-    patch_connect.add(Domain(domain="moved.com", hostname="da-old.example.com", username="admin"))
+    patch_connect.add(
+        Domain(domain="moved.com", hostname="da-old.example.com", username="admin")
+    )
     patch_connect.commit()
 
     with patch.object(worker, "_fetch_da_domains", return_value={"moved.com"}):
@@ -150,7 +167,9 @@ def test_fetch_returns_domains_from_json(worker):
     mock_resp = _make_json_response(["example.com", "test.com"])
 
     with patch("requests.get", return_value=mock_resp):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result == {"example.com", "test.com"}
 
@@ -160,7 +179,9 @@ def test_fetch_paginates(worker):
     page2 = _make_json_response(["b.com"], total_pages=2)
 
     with patch("requests.get", side_effect=[page1, page2]):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result == {"a.com", "b.com"}
 
@@ -170,9 +191,13 @@ def test_fetch_redirect_triggers_session_login(worker):
     redirect_resp.status_code = 302
     redirect_resp.is_redirect = True
 
-    with patch("requests.get", return_value=redirect_resp), \
-         patch.object(worker, "_da_session_login", return_value=None):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+    with (
+        patch("requests.get", return_value=redirect_resp),
+        patch.object(worker, "_da_session_login", return_value=None),
+    ):
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result is None
 
@@ -185,28 +210,40 @@ def test_fetch_html_response_returns_none(worker):
     mock_resp.raise_for_status = MagicMock()
 
     with patch("requests.get", return_value=mock_resp):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result is None
 
 
 def test_fetch_connection_error_returns_none(worker):
-    with patch("requests.get", side_effect=requests.exceptions.ConnectionError("refused")):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+    with patch(
+        "requests.get", side_effect=requests.exceptions.ConnectionError("refused")
+    ):
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result is None
 
 
 def test_fetch_timeout_returns_none(worker):
     with patch("requests.get", side_effect=requests.exceptions.Timeout()):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result is None
 
 
 def test_fetch_ssl_error_returns_none(worker):
-    with patch("requests.get", side_effect=requests.exceptions.SSLError("cert verify failed")):
-        result = worker._fetch_da_domains("da1.example.com", 2222, "admin", "secret", True)
+    with patch(
+        "requests.get", side_effect=requests.exceptions.SSLError("cert verify failed")
+    ):
+        result = worker._fetch_da_domains(
+            "da1.example.com", 2222, "admin", "secret", True
+        )
 
     assert result is None
 

@@ -1,10 +1,14 @@
 """Shared test fixtures for directdnsonly test suite."""
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from directdnsonly.app.db import Base
-from directdnsonly.app.db.models import Domain, Key  # noqa: F401 — registers models with Base
+from directdnsonly.app.db.models import (
+    Domain,
+    Key,
+)  # noqa: F401 — registers models with Base
 
 
 @pytest.fixture

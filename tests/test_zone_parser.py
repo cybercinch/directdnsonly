@@ -1,4 +1,5 @@
 """Tests for directdnsonly.app.utils.zone_parser."""
+
 import pytest
 from dns.exception import DNSException
 

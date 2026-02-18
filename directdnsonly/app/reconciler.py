@@ -109,9 +109,7 @@ class ReconciliationWorker:
                     f"[reconciler] {hostname}: {len(da_domains) if da_domains else 0} active domain(s) in DA"
                 )
             except Exception as e:
-                logger.error(
-                    f"[reconciler] Unexpected error polling {hostname}: {e}"
-                )
+                logger.error(f"[reconciler] Unexpected error polling {hostname}: {e}")
 
         # Now check local DB for all domains, update master if needed, and queue deletes only from recorded master
         session = connect()
@@ -147,12 +145,14 @@ class ReconciliationWorker:
                                 f"(master: {recorded_master})"
                             )
                         else:
-                            self.delete_queue.put({
-                                "domain": record.domain,
-                                "hostname": record.hostname,
-                                "username": record.username or "",
-                                "source": "reconciler",
-                            })
+                            self.delete_queue.put(
+                                {
+                                    "domain": record.domain,
+                                    "hostname": record.hostname,
+                                    "username": record.username or "",
+                                    "source": "reconciler",
+                                }
+                            )
                             logger.debug(
                                 f"[reconciler] Queued delete for orphan: {record.domain} "
                                 f"(master: {recorded_master})"
@@ -161,9 +161,13 @@ class ReconciliationWorker:
             if migrated or backfilled:
                 session.commit()
                 if backfilled:
-                    logger.info(f"[reconciler] {backfilled} domain(s) had missing hostname backfilled.")
+                    logger.info(
+                        f"[reconciler] {backfilled} domain(s) had missing hostname backfilled."
+                    )
                 if migrated:
-                    logger.info(f"[reconciler] {migrated} domain(s) migrated to new master.")
+                    logger.info(
+                        f"[reconciler] {migrated} domain(s) migrated to new master."
+                    )
         finally:
             session.close()
         if self.dry_run:
@@ -178,7 +182,13 @@ class ReconciliationWorker:
             )
 
     def _fetch_da_domains(
-        self, hostname: str, port: int, username: str, password: str, use_ssl: bool, ipp: int = 1000
+        self,
+        hostname: str,
+        port: int,
+        username: str,
+        password: str,
+        use_ssl: bool,
+        ipp: int = 1000,
     ):
         """Fetch all domains from a DA server via CMD_DNS_ADMIN (JSON, paging supported).
 
@@ -205,13 +215,21 @@ class ReconciliationWorker:
 
                 response = requests.get(url, **req_kwargs)
 
-                if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
+                if response.is_redirect or response.status_code in (
+                    301,
+                    302,
+                    303,
+                    307,
+                    308,
+                ):
                     if not cookies:
                         logger.debug(
                             f"[reconciler] {hostname}:{port} redirected Basic Auth "
                             f"(HTTP {response.status_code}) — attempting session login (DA Evo)"
                         )
-                        cookies = self._da_session_login(scheme, hostname, port, username, password)
+                        cookies = self._da_session_login(
+                            scheme, hostname, port, username, password
+                        )
                         if cookies is None:
                             return None
                         continue  # retry this page with cookies
@@ -279,9 +297,7 @@ class ReconciliationWorker:
             )
             return None
         except Exception as e:
-            logger.error(
-                f"[reconciler] Unexpected error fetching from {hostname}: {e}"
-            )
+            logger.error(f"[reconciler] Unexpected error fetching from {hostname}: {e}")
             return None
 
     def _da_session_login(
@@ -310,12 +326,12 @@ class ReconciliationWorker:
                     f"check username/password."
                 )
                 return None
-            logger.debug(f"[reconciler] {hostname}:{port} session login successful (DA Evo)")
+            logger.debug(
+                f"[reconciler] {hostname}:{port} session login successful (DA Evo)"
+            )
             return response.cookies
         except Exception as e:
-            logger.error(
-                f"[reconciler] {hostname}:{port} session login failed: {e}"
-            )
+            logger.error(f"[reconciler] {hostname}:{port} session login failed: {e}")
             return None
 
     @staticmethod
@@ -334,24 +350,44 @@ class ReconciliationWorker:
         domains = params.get("list[]", [])
         return {d.strip().lower() for d in domains if d.strip()}
 
+
 if __name__ == "__main__":
     import argparse
     import sys
     from queue import Queue
 
-    parser = argparse.ArgumentParser(description="Test DirectAdmin domain fetcher (JSON/paging)")
+    parser = argparse.ArgumentParser(
+        description="Test DirectAdmin domain fetcher (JSON/paging)"
+    )
     parser.add_argument("--hostname", required=True, help="DirectAdmin server hostname")
-    parser.add_argument("--port", type=int, default=2222, help="DirectAdmin port (default: 2222)")
+    parser.add_argument(
+        "--port", type=int, default=2222, help="DirectAdmin port (default: 2222)"
+    )
     parser.add_argument("--username", required=True, help="DirectAdmin admin username")
     parser.add_argument("--password", required=True, help="DirectAdmin admin password")
     parser.add_argument("--ssl", action="store_true", help="Use HTTPS (default: True)")
-    parser.add_argument("--no-ssl", dest="ssl", action="store_false", help="Use HTTP (not recommended)")
+    parser.add_argument(
+        "--no-ssl", dest="ssl", action="store_false", help="Use HTTP (not recommended)"
+    )
     parser.set_defaults(ssl=True)
-    parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certs (default: True)")
-    parser.add_argument("--no-verify-ssl", dest="verify_ssl", action="store_false", help="Don't verify SSL certs")
+    parser.add_argument(
+        "--verify-ssl", action="store_true", help="Verify SSL certs (default: True)"
+    )
+    parser.add_argument(
+        "--no-verify-ssl",
+        dest="verify_ssl",
+        action="store_false",
+        help="Don't verify SSL certs",
+    )
     parser.set_defaults(verify_ssl=True)
-    parser.add_argument("--ipp", type=int, default=1000, help="Items per page (default: 1000)")
-    parser.add_argument("--print-json", action="store_true", help="Print raw JSON response for first page")
+    parser.add_argument(
+        "--ipp", type=int, default=1000, help="Items per page (default: 1000)"
+    )
+    parser.add_argument(
+        "--print-json",
+        action="store_true",
+        help="Print raw JSON response for first page",
+    )
 
     args = parser.parse_args()
 
@@ -372,7 +408,9 @@ if __name__ == "__main__":
     q = Queue()
     worker = ReconciliationWorker(q, config)
     server = config["directadmin_servers"][0]
-    print(f"Fetching domains from {server['hostname']}:{server['port']} (ipp={args.ipp})...")
+    print(
+        f"Fetching domains from {server['hostname']}:{server['port']} (ipp={args.ipp})..."
+    )
     # Directly call the fetch method for testing
     domains = worker._fetch_da_domains(
         server["hostname"],
@@ -380,7 +418,7 @@ if __name__ == "__main__":
         server.get("username"),
         server.get("password"),
         server.get("ssl", True),
-        ipp=args.ipp
+        ipp=args.ipp,
     )
     if domains is None:
         print("Failed to fetch domains.", file=sys.stderr)

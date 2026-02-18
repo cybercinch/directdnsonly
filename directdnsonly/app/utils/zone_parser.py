@@ -59,9 +59,7 @@ def count_zone_records(zone_data: str, domain_name: str) -> int:
             if rdata.rdclass == IN:
                 count += 1
 
-        logger.debug(
-            f"Source zone {domain_name} contains {count} records"
-        )
+        logger.debug(f"Source zone {domain_name} contains {count} records")
         return count
 
     except DNSException as e:

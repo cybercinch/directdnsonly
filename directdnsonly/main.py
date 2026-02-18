@@ -50,7 +50,9 @@ def main():
 
         # Configure CherryPy
         user_password_dict = {
-            config.get_string("app.auth_username"): config.get_string("app.auth_password")
+            config.get_string("app.auth_username"): config.get_string(
+                "app.auth_password"
+            )
         }
         check_password = cherrypy.lib.auth_basic.checkpassword_dict(user_password_dict)
 

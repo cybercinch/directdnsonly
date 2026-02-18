@@ -14,7 +14,9 @@ from directdnsonly.app.reconciler import ReconciliationWorker
 
 
 class WorkerManager:
-    def __init__(self, queue_path: str, backend_registry, reconciliation_config: dict = None):
+    def __init__(
+        self, queue_path: str, backend_registry, reconciliation_config: dict = None
+    ):
         self.queue_path = queue_path
         self.backend_registry = backend_registry
         self._running = False
@@ -86,9 +88,7 @@ class WorkerManager:
                         f"{len(backends)} backends concurrently: "
                         f"{', '.join(backends.keys())}"
                     )
-                    self._process_backends_parallel(
-                        backends, item, session
-                    )
+                    self._process_backends_parallel(backends, item, session)
                 else:
                     # Single backend, no need for thread overhead
                     for backend_name, backend in backends.items():
@@ -126,9 +126,7 @@ class WorkerManager:
         try:
             logger.debug(f"Using backend: {backend_name}")
             if backend.write_zone(item["domain"], item["zone_file"]):
-                logger.debug(
-                    f"Successfully updated {item['domain']} in {backend_name}"
-                )
+                logger.debug(f"Successfully updated {item['domain']} in {backend_name}")
                 if backend.get_name() == "bind":
                     # Need to update the named.conf
                     backend.update_named_conf(
@@ -144,9 +142,7 @@ class WorkerManager:
                     backend_name, backend, item["domain"], item["zone_file"]
                 )
             else:
-                logger.error(
-                    f"Failed to update {item['domain']} in {backend_name}"
-                )
+                logger.error(f"Failed to update {item['domain']} in {backend_name}")
         except Exception as e:
             logger.error(f"Error in {backend_name}: {str(e)}")
 
@@ -165,9 +161,7 @@ class WorkerManager:
 
                 record = session.query(Domain).filter_by(domain=domain).first()
                 if not record:
-                    logger.warning(
-                        f"Domain {domain} not found in DB — skipping delete"
-                    )
+                    logger.warning(f"Domain {domain} not found in DB — skipping delete")
                     self.delete_queue.task_done()
                     continue
 
@@ -194,16 +188,29 @@ class WorkerManager:
                 elif len(backends) > 1:
                     # Parallel delete, track failures
                     results = []
-                    def delete_backend_wrapper(backend_name, backend, domain, remaining_domains):
+
+                    def delete_backend_wrapper(
+                        backend_name, backend, domain, remaining_domains
+                    ):
                         try:
                             return backend.delete_zone(domain)
                         except Exception as e:
-                            logger.error(f"Error deleting {domain} from {backend_name}: {e}")
+                            logger.error(
+                                f"Error deleting {domain} from {backend_name}: {e}"
+                            )
                             return False
+
                     from concurrent.futures import ThreadPoolExecutor, as_completed
+
                     with ThreadPoolExecutor(max_workers=len(backends)) as executor:
                         futures = {
-                            executor.submit(delete_backend_wrapper, backend_name, backend, domain, remaining_domains): backend_name
+                            executor.submit(
+                                delete_backend_wrapper,
+                                backend_name,
+                                backend,
+                                domain,
+                                remaining_domains,
+                            ): backend_name
                             for backend_name, backend in backends.items()
                         }
                         for future in as_completed(futures):
@@ -212,9 +219,13 @@ class WorkerManager:
                                 result = future.result()
                                 results.append(result)
                                 if not result:
-                                    logger.error(f"Failed to delete {domain} from {backend_name}")
+                                    logger.error(
+                                        f"Failed to delete {domain} from {backend_name}"
+                                    )
                             except Exception as e:
-                                logger.error(f"Unhandled error deleting from {backend_name}: {e}")
+                                logger.error(
+                                    f"Unhandled error deleting from {backend_name}: {e}"
+                                )
                                 results.append(False)
                     delete_success = all(results)
                 else:
@@ -223,10 +234,14 @@ class WorkerManager:
                         try:
                             result = backend.delete_zone(domain)
                             if not result:
-                                logger.error(f"Failed to delete {domain} from {backend_name}")
+                                logger.error(
+                                    f"Failed to delete {domain} from {backend_name}"
+                                )
                                 delete_success = False
                         except Exception as e:
-                            logger.error(f"Error deleting {domain} from {backend_name}: {e}")
+                            logger.error(
+                                f"Error deleting {domain} from {backend_name}: {e}"
+                            )
                             delete_success = False
 
                 if delete_success:
@@ -236,7 +251,9 @@ class WorkerManager:
                     self.delete_queue.task_done()
                     logger.success(f"Delete completed for {domain}")
                 else:
-                    logger.error(f"Delete failed for {domain} on one or more backends — DB record retained")
+                    logger.error(
+                        f"Delete failed for {domain} on one or more backends — DB record retained"
+                    )
                     self.delete_queue.task_done()
 
             except Empty:
@@ -270,7 +287,10 @@ class WorkerManager:
             futures = {
                 executor.submit(
                     self._delete_single_backend,
-                    backend_name, backend, domain, remaining_domains
+                    backend_name,
+                    backend,
+                    domain,
+                    remaining_domains,
                 ): backend_name
                 for backend_name, backend in backends.items()
             }
@@ -279,9 +299,7 @@ class WorkerManager:
                 try:
                     future.result()
                 except Exception as e:
-                    logger.error(
-                        f"Unhandled error deleting from {backend_name}: {e}"
-                    )
+                    logger.error(f"Unhandled error deleting from {backend_name}: {e}")
         elapsed = (time.monotonic() - start_time) * 1000
         logger.debug(
             f"Parallel delete of {domain} across "
@@ -292,13 +310,11 @@ class WorkerManager:
         """Process zone updates across multiple backends in parallel"""
         start_time = time.monotonic()
         with ThreadPoolExecutor(
-            max_workers=len(backends),
-            thread_name_prefix="backend"
+            max_workers=len(backends), thread_name_prefix="backend"
         ) as executor:
             futures = {
                 executor.submit(
-                    self._process_single_backend,
-                    backend_name, backend, item, session
+                    self._process_single_backend, backend_name, backend, item, session
                 ): backend_name
                 for backend_name, backend in backends.items()
             }
@@ -317,9 +333,7 @@ class WorkerManager:
             f"{len(backends)} backends completed in {elapsed:.0f}ms"
         )
 
-    def _verify_backend_record_count(
-        self, backend_name, backend, zone_name, zone_data
-    ):
+    def _verify_backend_record_count(self, backend_name, backend, zone_name, zone_data):
         """Verify and reconcile the backend record count against the
         authoritative BIND zone from DirectAdmin.
 
@@ -344,9 +358,7 @@ class WorkerManager:
                 )
                 return
 
-            matches, actual = backend.verify_zone_record_count(
-                zone_name, expected
-            )
+            matches, actual = backend.verify_zone_record_count(zone_name, expected)
 
             if matches:
                 return  # All good
@@ -357,9 +369,7 @@ class WorkerManager:
                     f"record(s) for {zone_name} — reconciling against "
                     f"DirectAdmin source zone"
                 )
-                success, removed = backend.reconcile_zone_records(
-                    zone_name, zone_data
-                )
+                success, removed = backend.reconcile_zone_records(zone_name, zone_data)
                 if success and removed > 0:
                     # Verify again after reconciliation
                     matches, new_count = backend.verify_zone_record_count(
@@ -437,6 +447,9 @@ class WorkerManager:
             "save_queue_size": self.save_queue.qsize(),
             "delete_queue_size": self.delete_queue.qsize(),
             "save_worker_alive": self._save_thread and self._save_thread.is_alive(),
-            "delete_worker_alive": self._delete_thread and self._delete_thread.is_alive(),
-            "reconciler_alive": self._reconciler.is_alive if self._reconciler else False,
+            "delete_worker_alive": self._delete_thread
+            and self._delete_thread.is_alive(),
+            "reconciler_alive": (
+                self._reconciler.is_alive if self._reconciler else False
+            ),
         }

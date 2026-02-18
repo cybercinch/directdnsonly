@@ -113,19 +113,23 @@ class DNSAdminAPI:
 
         if domain_exists:
             record = get_domain_record(domain)
-            return urlencode({
-                "error": 0,
-                "exists": 1,
-                "details": f"Domain exists on {record.hostname}",
-            })
+            return urlencode(
+                {
+                    "error": 0,
+                    "exists": 1,
+                    "details": f"Domain exists on {record.hostname}",
+                }
+            )
 
         # parent match only
         parent_record = get_parent_domain_record(domain)
-        return urlencode({
-            "error": 0,
-            "exists": 2,
-            "details": f"Parent Domain exists on {parent_record.hostname}",
-        })
+        return urlencode(
+            {
+                "error": 0,
+                "exists": 2,
+                "details": f"Parent Domain exists on {parent_record.hostname}",
+            }
+        )
 
     def _handle_rawsave(self, domain: str, params: dict):
         """Process zone file saves"""

@@ -1,4 +1,5 @@
 """Tests for directdnsonly.app.api.admin — DNSAdminAPI handler methods."""
+
 import pytest
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs
@@ -60,8 +61,12 @@ def test_handle_exists_unsupported_action_returns_error(api):
 
 
 def test_handle_exists_domain_not_found(api):
-    with patch("directdnsonly.app.api.admin.check_zone_exists", return_value=False), \
-         patch("directdnsonly.app.api.admin.check_parent_domain_owner", return_value=False):
+    with (
+        patch("directdnsonly.app.api.admin.check_zone_exists", return_value=False),
+        patch(
+            "directdnsonly.app.api.admin.check_parent_domain_owner", return_value=False
+        ),
+    ):
         result = api._handle_exists({"action": "exists", "domain": "example.com"})
 
     parsed = parse_qs(result)
@@ -73,8 +78,10 @@ def test_handle_exists_domain_found(api):
     record = MagicMock()
     record.hostname = "da1.example.com"
 
-    with patch("directdnsonly.app.api.admin.check_zone_exists", return_value=True), \
-         patch("directdnsonly.app.api.admin.get_domain_record", return_value=record):
+    with (
+        patch("directdnsonly.app.api.admin.check_zone_exists", return_value=True),
+        patch("directdnsonly.app.api.admin.get_domain_record", return_value=record),
+    ):
         result = api._handle_exists({"action": "exists", "domain": "example.com"})
 
     parsed = parse_qs(result)
@@ -87,14 +94,22 @@ def test_handle_exists_parent_found(api):
     parent = MagicMock()
     parent.hostname = "da2.example.com"
 
-    with patch("directdnsonly.app.api.admin.check_zone_exists", return_value=False), \
-         patch("directdnsonly.app.api.admin.check_parent_domain_owner", return_value=True), \
-         patch("directdnsonly.app.api.admin.get_parent_domain_record", return_value=parent):
-        result = api._handle_exists({
-            "action": "exists",
-            "domain": "sub.example.com",
-            "check_for_parent_domain": "1",
-        })
+    with (
+        patch("directdnsonly.app.api.admin.check_zone_exists", return_value=False),
+        patch(
+            "directdnsonly.app.api.admin.check_parent_domain_owner", return_value=True
+        ),
+        patch(
+            "directdnsonly.app.api.admin.get_parent_domain_record", return_value=parent
+        ),
+    ):
+        result = api._handle_exists(
+            {
+                "action": "exists",
+                "domain": "sub.example.com",
+                "check_for_parent_domain": "1",
+            }
+        )
 
     parsed = parse_qs(result)
     assert parsed["error"] == ["0"]
@@ -107,9 +122,11 @@ def test_handle_exists_no_parent_check_when_flag_absent(api):
     record = MagicMock()
     record.hostname = "da1.example.com"
 
-    with patch("directdnsonly.app.api.admin.check_zone_exists", return_value=True), \
-         patch("directdnsonly.app.api.admin.check_parent_domain_owner") as mock_parent, \
-         patch("directdnsonly.app.api.admin.get_domain_record", return_value=record):
+    with (
+        patch("directdnsonly.app.api.admin.check_zone_exists", return_value=True),
+        patch("directdnsonly.app.api.admin.check_parent_domain_owner") as mock_parent,
+        patch("directdnsonly.app.api.admin.get_domain_record", return_value=record),
+    ):
         api._handle_exists({"action": "exists", "domain": "example.com"})
 
     mock_parent.assert_not_called()
@@ -123,14 +140,21 @@ SAMPLE_ZONE = "$ORIGIN example.com.\n$TTL 300\nexample.com. 300 IN A 1.2.3.4\n"
 
 
 def test_rawsave_enqueues_item(api, save_queue):
-    with patch("directdnsonly.app.api.admin.validate_and_normalize_zone",
-               return_value=SAMPLE_ZONE), \
-         patch.object(cherrypy, "request", MagicMock(remote=MagicMock(ip="127.0.0.1"))):
-        result = api._handle_rawsave("example.com", {
-            "zone_file": SAMPLE_ZONE,
-            "hostname": "da1.example.com",
-            "username": "admin",
-        })
+    with (
+        patch(
+            "directdnsonly.app.api.admin.validate_and_normalize_zone",
+            return_value=SAMPLE_ZONE,
+        ),
+        patch.object(cherrypy, "request", MagicMock(remote=MagicMock(ip="127.0.0.1"))),
+    ):
+        result = api._handle_rawsave(
+            "example.com",
+            {
+                "zone_file": SAMPLE_ZONE,
+                "hostname": "da1.example.com",
+                "username": "admin",
+            },
+        )
 
     save_queue.put.assert_called_once()
     item = save_queue.put.call_args[0][0]
@@ -150,9 +174,13 @@ def test_rawsave_missing_zone_file_raises(api):
 
 
 def test_rawsave_invalid_zone_raises(api):
-    with patch("directdnsonly.app.api.admin.validate_and_normalize_zone",
-               side_effect=ValueError("Invalid zone data: bad record")), \
-         patch.object(cherrypy, "request", MagicMock(remote=MagicMock(ip="127.0.0.1"))):
+    with (
+        patch(
+            "directdnsonly.app.api.admin.validate_and_normalize_zone",
+            side_effect=ValueError("Invalid zone data: bad record"),
+        ),
+        patch.object(cherrypy, "request", MagicMock(remote=MagicMock(ip="127.0.0.1"))),
+    ):
         with pytest.raises(ValueError, match="Invalid zone data"):
             api._handle_rawsave("example.com", {"zone_file": "garbage"})
 
@@ -164,10 +192,13 @@ def test_rawsave_invalid_zone_raises(api):
 
 def test_delete_enqueues_item(api, delete_queue):
     with patch.object(cherrypy, "request", MagicMock(remote=MagicMock(ip="10.0.0.1"))):
-        result = api._handle_delete("example.com", {
-            "hostname": "da1.example.com",
-            "username": "admin",
-        })
+        result = api._handle_delete(
+            "example.com",
+            {
+                "hostname": "da1.example.com",
+                "username": "admin",
+            },
+        )
 
     delete_queue.put.assert_called_once()
     item = delete_queue.put.call_args[0][0]

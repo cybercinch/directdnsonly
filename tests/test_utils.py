@@ -1,4 +1,5 @@
 """Tests for directdnsonly.app.utils — zone index helper functions."""
+
 import pytest
 
 from directdnsonly.app.db.models import Domain
