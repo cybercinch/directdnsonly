@@ -1,9 +1,8 @@
 """Tests for directdnsonly.app.reconciler — ReconciliationWorker."""
 
 import pytest
-import requests.exceptions
 from queue import Queue
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from directdnsonly.app.reconciler import ReconciliationWorker
 from directdnsonly.app.db.models import Domain
@@ -48,6 +47,18 @@ def dry_run_worker(delete_queue):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+DA_CLIENT_PATH = "directdnsonly.app.reconciler.DirectAdminClient"
+
+
+def _patch_da(return_value):
+    """Patch DirectAdminClient so list_domains returns a fixed value."""
+    return patch(DA_CLIENT_PATH, **{"return_value.list_domains.return_value": return_value})
+
+
+# ---------------------------------------------------------------------------
 # _reconcile_all — orphan detection
 # ---------------------------------------------------------------------------
 
@@ -58,7 +69,7 @@ def test_orphan_queued_when_domain_missing_from_da(worker, delete_queue, patch_c
     )
     patch_connect.commit()
 
-    with patch.object(worker, "_fetch_da_domains", return_value=set()):
+    with _patch_da(set()):
         worker._reconcile_all()
 
     assert not delete_queue.empty()
@@ -73,7 +84,7 @@ def test_orphan_not_queued_in_dry_run(dry_run_worker, delete_queue, patch_connec
     )
     patch_connect.commit()
 
-    with patch.object(dry_run_worker, "_fetch_da_domains", return_value=set()):
+    with _patch_da(set()):
         dry_run_worker._reconcile_all()
 
     assert delete_queue.empty()
@@ -86,7 +97,7 @@ def test_orphan_not_queued_for_unknown_server(worker, delete_queue, patch_connec
     )
     patch_connect.commit()
 
-    with patch.object(worker, "_fetch_da_domains", return_value=set()):
+    with _patch_da(set()):
         worker._reconcile_all()
 
     assert delete_queue.empty()
@@ -98,7 +109,7 @@ def test_active_domain_not_queued(worker, delete_queue, patch_connect):
     )
     patch_connect.commit()
 
-    with patch.object(worker, "_fetch_da_domains", return_value={"good.com"}):
+    with _patch_da({"good.com"}):
         worker._reconcile_all()
 
     assert delete_queue.empty()
@@ -113,7 +124,7 @@ def test_backfill_null_hostname(worker, patch_connect):
     patch_connect.add(Domain(domain="backfill.com", hostname=None, username="admin"))
     patch_connect.commit()
 
-    with patch.object(worker, "_fetch_da_domains", return_value={"backfill.com"}):
+    with _patch_da({"backfill.com"}):
         worker._reconcile_all()
 
     record = patch_connect.query(Domain).filter_by(domain="backfill.com").first()
@@ -126,7 +137,7 @@ def test_migration_updates_hostname(worker, patch_connect):
     )
     patch_connect.commit()
 
-    with patch.object(worker, "_fetch_da_domains", return_value={"moved.com"}):
+    with _patch_da({"moved.com"}):
         worker._reconcile_all()
 
     record = patch_connect.query(Domain).filter_by(domain="moved.com").first()
@@ -138,146 +149,11 @@ def test_dry_run_still_backfills(dry_run_worker, patch_connect):
     patch_connect.add(Domain(domain="fill.com", hostname=None, username="admin"))
     patch_connect.commit()
 
-    with patch.object(dry_run_worker, "_fetch_da_domains", return_value={"fill.com"}):
+    with _patch_da({"fill.com"}):
         dry_run_worker._reconcile_all()
 
     record = patch_connect.query(Domain).filter_by(domain="fill.com").first()
     assert record.hostname == "da1.example.com"
-
-
-# ---------------------------------------------------------------------------
-# _fetch_da_domains — HTTP handling
-# ---------------------------------------------------------------------------
-
-
-def _make_json_response(domains_dict, total_pages=1):
-    """Return a mock requests.Response with JSON payload matching DA format."""
-    data = {str(i): {"domain": d} for i, d in enumerate(domains_dict)}
-    data["info"] = {"total_pages": total_pages}
-    mock = MagicMock()
-    mock.status_code = 200
-    mock.is_redirect = False
-    mock.headers = {"Content-Type": "application/json"}
-    mock.json.return_value = data
-    mock.raise_for_status = MagicMock()
-    return mock
-
-
-def test_fetch_returns_domains_from_json(worker):
-    mock_resp = _make_json_response(["example.com", "test.com"])
-
-    with patch("requests.get", return_value=mock_resp):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result == {"example.com", "test.com"}
-
-
-def test_fetch_paginates(worker):
-    page1 = _make_json_response(["a.com"], total_pages=2)
-    page2 = _make_json_response(["b.com"], total_pages=2)
-
-    with patch("requests.get", side_effect=[page1, page2]):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result == {"a.com", "b.com"}
-
-
-def test_fetch_redirect_triggers_session_login(worker):
-    redirect_resp = MagicMock()
-    redirect_resp.status_code = 302
-    redirect_resp.is_redirect = True
-
-    with (
-        patch("requests.get", return_value=redirect_resp),
-        patch.object(worker, "_da_session_login", return_value=None),
-    ):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result is None
-
-
-def test_fetch_html_response_returns_none(worker):
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.is_redirect = False
-    mock_resp.headers = {"Content-Type": "text/html; charset=utf-8"}
-    mock_resp.raise_for_status = MagicMock()
-
-    with patch("requests.get", return_value=mock_resp):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result is None
-
-
-def test_fetch_connection_error_returns_none(worker):
-    with patch(
-        "requests.get", side_effect=requests.exceptions.ConnectionError("refused")
-    ):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result is None
-
-
-def test_fetch_timeout_returns_none(worker):
-    with patch("requests.get", side_effect=requests.exceptions.Timeout()):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result is None
-
-
-def test_fetch_ssl_error_returns_none(worker):
-    with patch(
-        "requests.get", side_effect=requests.exceptions.SSLError("cert verify failed")
-    ):
-        result = worker._fetch_da_domains(
-            "da1.example.com", 2222, "admin", "secret", True
-        )
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _parse_da_domain_list — legacy format fallback
-# ---------------------------------------------------------------------------
-
-
-def test_parse_standard_querystring():
-    body = "list[]=example.com&list[]=test.com"
-    result = ReconciliationWorker._parse_da_domain_list(body)
-    assert result == {"example.com", "test.com"}
-
-
-def test_parse_newline_separated():
-    body = "list[]=example.com\nlist[]=test.com"
-    result = ReconciliationWorker._parse_da_domain_list(body)
-    assert result == {"example.com", "test.com"}
-
-
-def test_parse_empty_body_returns_empty_set():
-    assert ReconciliationWorker._parse_da_domain_list("") == set()
-
-
-def test_parse_normalises_to_lowercase():
-    result = ReconciliationWorker._parse_da_domain_list("list[]=EXAMPLE.COM")
-    assert "example.com" in result
-    assert "EXAMPLE.COM" not in result
-
-
-def test_parse_strips_whitespace():
-    result = ReconciliationWorker._parse_da_domain_list("list[]= example.com ")
-    assert "example.com" in result
 
 
 # ---------------------------------------------------------------------------
