@@ -15,25 +15,33 @@ DirectAdmin Multi-Server
         │
         ├─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-1  (container, BIND backend)
         │                                     │
-        │                               writes zone file
-        │                               reloads named
+        │                               Persistent Queue
+        │                               ├─ writes zone file
+        │                               ├─ reloads named
+        │                               └─ retry on failure (exp. backoff)
         │                               (serves authoritative DNS on :53)
         │
         └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-2  (container, BIND backend)
                                                │
-                                         writes zone file
-                                         reloads named
+                                         Persistent Queue
+                                         ├─ writes zone file
+                                         ├─ reloads named
+                                         └─ retry on failure (exp. backoff)
                                          (serves authoritative DNS on :53)
 ```
 
 **Each instance is completely independent** — no shared state, no cross-talk. Redundancy comes from DA pushing to both. If one container goes down, DA continues to push to the other.
 
-> **DNS consistency note:** DirectAdmin pushes to each Extra DNS server sequentially, not atomically. Two brief consistency windows exist:
->
-> - **Transient gap** — between the first and second push completing, the two instances will return different answers. This is typically sub-second and resolves on its own.
-> - **Permanent drift** — if the push to one instance fails permanently (network outage, container down), that instance will serve stale or missing zone data until DA retries or the zone is updated again. The built-in reconciliation poller detects *orphaned zones* (present in our DB but deleted from DA) but does **not** compare zone content between instances.
->
-> For workloads where split-brain DNS is unacceptable, use Topology B (single write path → multiple MySQL replicas) instead.
+#### Failure behaviour
+
+| Scenario | What happens |
+|---|---|
+| One container down during DA push | DA cannot deliver; that instance misses the update. The retry queue inside that instance cannot help — the push never arrived. When the container recovers, it will serve stale zone data until DA re-pushes (next zone change triggers a new push). |
+| BIND crashes but container stays up | The zone write lands in the persistent queue. The retry worker replays it with exponential backoff (30 s → 2 m → 5 m → 15 m → 30 m, up to 5 attempts). |
+| Zone deleted from DA while instance was down | The reconciliation poller detects the orphan on the next pass and queues a delete, keeping the BIND instance clean without manual intervention. |
+| Two instances diverge | No automatic cross-instance sync. Drift persists until DA re-pushes the affected zone (i.e. the next time that domain is touched in DA). |
+
+> **DNS consistency note:** DirectAdmin pushes to each Extra DNS server sequentially, not atomically. If one instance is offline when a zone is changed, that instance will serve stale data until the next DA push for that zone. For workloads where split-brain DNS is unacceptable, use Topology B (single write path → multiple MySQL backends) instead.
 
 #### `config/app.yml` — instance 1
 
@@ -57,7 +65,7 @@ dns:
 ```yaml
 services:
   directdnsonly-1:
-    image: guisea/directdnsonly:2.0.0
+    image: guisea/directdnsonly:2.3.0
     ports:
       - "2222:2222"   # DA pushes here
       - "53:53/udp"   # authoritative DNS
@@ -70,7 +78,7 @@ Register both containers as separate Extra DNS entries in DA → DNS Administrat
 
 ---
 
-### Topology B — Single Instance, Dual CoreDNS MySQL Backends (Multi-DC)
+### Topology B — Single Instance, Multiple CoreDNS MySQL Backends (Multi-DC)
 
 One DirectDNSOnly instance receives zone pushes from DirectAdmin and fans out to two (or more) CoreDNS MySQL databases in parallel. CoreDNS servers in each data centre read from their local database. The directdnsonly instance is the sole write path — it does **not** serve DNS itself.
 
@@ -79,20 +87,39 @@ DirectAdmin
         │
         └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly  (single container)
                                                 │
-                                     Persistent Queue (survive restarts)
+                                     Persistent Queue (survives restarts)
+                                     zone_data stored to SQLite after each write
                                                 │
                                      ThreadPoolExecutor (one thread per backend)
                                          │               │
                                          ▼               ▼
-                               coredns_mysql_primary   coredns_mysql_secondary
-                               (MySQL DC1 10.0.0.80)   (MySQL DC2 10.0.1.29)
+                               coredns_mysql_dc1   coredns_mysql_dc2
+                               (MySQL 10.0.0.80)   (MySQL 10.0.1.29)
                                          │               │
-                                         ▼               ▼
-                                  CoreDNS (DC1)    CoreDNS (DC2)
-                               serves :53 from DB  serves :53 from DB
+                                    [success]       [failure → retry queue]
+                                         │               │
+                                         ▼       30s/2m/5m/15m/30m backoff
+                                  CoreDNS (DC1)        retry → coredns_mysql_dc2
+                               serves :53 from DB
+                                                │
+                             Reconciliation poller (every N minutes)
+                             ├─ orphan detection (zones removed from DA)
+                             └─ healing pass: zone_exists() per backend
+                                → re-queue any backend missing a zone
+                                  using stored zone_data (no DA re-push needed)
 ```
 
-Both MySQL backends are written **concurrently** within the same zone update. A slow or unreachable secondary does not block the primary write. Per-backend record verification runs after each write.
+Both MySQL backends are written **concurrently** within the same zone update. A slow or unreachable secondary does not block the primary write. Failed backends enter the retry queue automatically. The reconciliation healing pass provides a further safety net for prolonged outages.
+
+#### Failure behaviour
+
+| Scenario | What happens |
+|---|---|
+| One MySQL backend unreachable | Other backend(s) succeed immediately. Failed backend queued for retry with exponential backoff (30 s → 2 m → 5 m → 15 m → 30 m, up to 5 attempts). |
+| MySQL backend down for hours | Retry queue exhausts. On recovery, the reconciliation healing pass detects the backend is missing zones and re-pushes all of them using stored `zone_data` — no DA intervention required. |
+| directdnsonly container restarts | Persistent queue survives. In-flight zone updates replay on startup. |
+| directdnsonly container down during DA push | DA cannot deliver. Persistent queue on disk is intact; when the container comes back, it resumes processing any previously queued items. New pushes during downtime are lost at the DA level (DA does not retry). |
+| Zone deleted from DA | Reconciliation poller detects orphan and queues delete across all backends. |
 
 #### `config/app.yml`
 
@@ -102,9 +129,9 @@ app:
   auth_password: your-secret
 
 dns:
-  default_backend: coredns_mysql_primary
+  default_backend: coredns_mysql_dc1
   backends:
-    coredns_mysql_primary:
+    coredns_mysql_dc1:
       type: coredns_mysql
       enabled: true
       host: 10.0.0.80
@@ -113,7 +140,7 @@ dns:
       username: coredns
       password: your-db-password
 
-    coredns_mysql_secondary:
+    coredns_mysql_dc2:
       type: coredns_mysql
       enabled: true
       host: 10.0.1.29
@@ -131,13 +158,19 @@ Adding a third data centre is a single stanza in the config — no code changes 
 
 | | Topology A — Dual BIND | Topology B — CoreDNS MySQL |
 |---|---|---|
-| DNS server | BIND9 (bundled in container) | CoreDNS (separate, reads MySQL) |
-| Redundancy | Two independent app+DNS units | One app, N MySQL replicas |
-| Zone storage | Zone files on container disk | MySQL database rows |
-| DA registration | Two Extra DNS server entries | One Extra DNS server entry |
-| Failure mode | One container can go down | MySQL connectivity required |
-| Horizontal scaling | Add more DA Extra DNS entries | Add more MySQL backends in config |
-| Best for | Simple HA, no external DB | Multi-DC, existing CoreDNS fleet |
+| **DNS server** | BIND9 (bundled in container) | CoreDNS (separate, reads MySQL) |
+| **Write path** | DA → each instance independently | DA → single instance → all backends |
+| **Zone storage** | Zone files on container disk | MySQL database rows |
+| **DA registration** | Two Extra DNS server entries | One Extra DNS server entry |
+| **Redundancy model** | Independent app+DNS units | One app, N database backends |
+| **Transient backend failure** | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) |
+| **Prolonged backend outage** | No auto-recovery — waits for next DA push to that zone | Reconciler healing pass re-pushes all missing zones using stored `zone_data` (no DA involvement) |
+| **Container down during push** | Zone missed entirely — no retry possible at DA level | Zone missed at DA level — same limitation |
+| **Cross-node consistency** | No sync between instances — drift until next DA push | All backends share same write path — reconciler enforces consistency |
+| **Orphan detection** | Yes — reconciler removes zones deleted from DA | Yes — reconciler removes zones deleted from DA |
+| **External DB required** | No | Yes (MySQL per CoreDNS node) |
+| **Horizontal scaling** | Add DA Extra DNS entries + deploy new containers | Add backend stanzas in `config/app.yml` |
+| **Best for** | Simple HA, no external DB | Multi-DC, stronger consistency guarantees |
 
 ---
 
