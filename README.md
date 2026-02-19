@@ -115,8 +115,8 @@ Both MySQL backends are written **concurrently** within the same zone update. A 
 
 | Scenario | What happens |
 |---|---|
-| One MySQL backend unreachable | Other backend(s) succeed immediately. Failed backend queued for retry with exponential backoff (30 s → 2 m → 5 m → 15 m → 30 m, up to 5 attempts). |
-| MySQL backend down for hours | Retry queue exhausts. On recovery, the reconciliation healing pass detects the backend is missing zones and re-pushes all of them using stored `zone_data` — no DA intervention required. |
+| One MySQL backend unreachable | Other backend(s) succeed immediately. Failed backend queued for retry with exponential backoff (30 s → 2 m → 5 m → 15 m → 30 m, up to 5 attempts). CoreDNS continues serving from its local JSON cache throughout. |
+| MySQL backend down for hours | Retry queue exhausts. CoreDNS serves from cache the entire time — zero query downtime. On recovery, the reconciliation healing pass detects the backend is missing zones and re-pushes all of them using stored `zone_data` — no DA intervention required. |
 | directdnsonly container restarts | Persistent queue survives. In-flight zone updates replay on startup. |
 | directdnsonly container down during DA push | DA cannot deliver. Persistent queue on disk is intact; when the container comes back, it resumes processing any previously queued items. New pushes during downtime are lost at the DA level (DA does not retry). |
 | Zone deleted from DA | Reconciliation poller detects orphan and queues delete across all backends. |
@@ -314,18 +314,21 @@ NS records in the additional section, does not set the AA flag, and does not
 handle wildcard records.
 
 This project is designed to work with a patched fork that resolves all of those
-issues:
+issues and adds production-grade resilience:
 
 **[cybercinch/coredns_mysql_extend](https://github.com/cybercinch/coredns_mysql_extend)**
 
-Key differences from the upstream plugin:
+| Feature | Detail |
+|---|---|
+| **Fully authoritative** | Correct AA flag, NXDOMAIN on misses, NS records in the additional section |
+| **Wildcard records** | `*` entries served correctly |
+| **Connection pooling** | Configurable MySQL connection management — efficient under load |
+| **Degraded operation** | Automatic fallback to a local JSON cache when MySQL is unavailable — DNS keeps serving |
+| **Smart caching** | Intelligent per-record cache management reduces per-query MySQL round-trips |
+| **Health monitoring** | Continuous database health checks with configurable intervals |
+| **Zero downtime** | DNS continues serving during database maintenance windows |
 
-- Fully authoritative responses — correct AA flag and NXDOMAIN on misses
-- Wildcard record support (`*` entries served correctly)
-- NS records returned in the additional section
-- **Built-in file caching** — CoreDNS caches zone data from MySQL to local files, so queries are served from the cache if MySQL is temporarily unreachable. This also eliminates the per-query MySQL round-trip for frequently resolved names.
-
-The file cache makes Topology B significantly more resilient to MySQL hiccups: CoreDNS keeps serving from cache while directdnsonly's retry queue waits for MySQL to recover.
+**Why this matters for Topology B:** directdnsonly's retry queue handles the write side during a MySQL outage — the CoreDNS fork handles the read side. Between them, neither writes nor queries are dropped during transient database failures.
 
 Use the NSD or BIND backend if you want a zero-dependency setup with no custom CoreDNS build required.
 
