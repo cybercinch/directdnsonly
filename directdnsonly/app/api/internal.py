@@ -1,6 +1,7 @@
 import cherrypy
 import json
 from loguru import logger
+from sqlalchemy import select
 from directdnsonly.app.db import connect
 from directdnsonly.app.db.models import Domain
 
@@ -30,12 +31,11 @@ class InternalAPI:
         session = connect()
         try:
             if domain:
-                record = (
-                    session.query(Domain)
+                record = session.execute(
+                    select(Domain)
                     .filter_by(domain=domain)
-                    .filter(Domain.zone_data.isnot(None))
-                    .first()
-                )
+                    .where(Domain.zone_data.isnot(None))
+                ).scalar_one_or_none()
                 if not record:
                     cherrypy.response.status = 404
                     return json.dumps({"error": "not found"}).encode()
@@ -53,11 +53,9 @@ class InternalAPI:
                     }
                 ).encode()
             else:
-                records = (
-                    session.query(Domain)
-                    .filter(Domain.zone_data.isnot(None))
-                    .all()
-                )
+                records = session.execute(
+                    select(Domain).where(Domain.zone_data.isnot(None))
+                ).scalars().all()
                 return json.dumps(
                     [
                         {

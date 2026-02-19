@@ -65,6 +65,7 @@ def test_start_skips_when_disabled(caplog):
 
 def test_start_warns_when_no_peers(caplog):
     import logging
+
     worker = PeerSyncWorker({"enabled": True, "peers": []})
     with patch.object(worker, "_run"):
         worker.start()
@@ -131,7 +132,9 @@ def test_sync_creates_new_local_record(patch_connect, monkeypatch):
 def test_sync_updates_older_local_record(patch_connect, monkeypatch):
     """When local zone_data is older than peer's, it is overwritten."""
     session = patch_connect
-    session.add(Domain(domain="example.com", zone_data="old data", zone_updated_at=OLDER))
+    session.add(
+        Domain(domain="example.com", zone_data="old data", zone_updated_at=OLDER)
+    )
     session.commit()
 
     worker = PeerSyncWorker(BASE_CONFIG)
@@ -149,7 +152,10 @@ def test_sync_updates_older_local_record(patch_connect, monkeypatch):
 
     worker._sync_from_peer(_make_peer())
 
-    record = session.query(Domain).filter_by(domain="example.com").first()
+    from sqlalchemy import select
+    record = session.execute(
+        select(Domain).filter_by(domain="example.com")
+    ).scalar_one_or_none()
     assert record.zone_data == ZONE_DATA
     assert record.zone_updated_at == NOW
 
@@ -157,7 +163,9 @@ def test_sync_updates_older_local_record(patch_connect, monkeypatch):
 def test_sync_skips_when_local_is_newer(patch_connect, monkeypatch):
     """When local zone_data is newer than peer's, it is not overwritten."""
     session = patch_connect
-    session.add(Domain(domain="example.com", zone_data="newer local", zone_updated_at=NOW))
+    session.add(
+        Domain(domain="example.com", zone_data="newer local", zone_updated_at=NOW)
+    )
     session.commit()
 
     worker = PeerSyncWorker(BASE_CONFIG)
