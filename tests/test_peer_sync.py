@@ -58,6 +58,27 @@ def test_peers_stored():
     assert worker.peers[0]["url"] == "http://ddo-2:2222"
 
 
+def test_peer_from_env_var(monkeypatch):
+    """DADNS_PEER_SYNC_PEER_URL adds a peer without a config file."""
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_URL", "http://ddo-env:2222")
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_USERNAME", "admin")
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_PASSWORD", "secret")
+    worker = PeerSyncWorker({"enabled": True})
+    assert len(worker.peers) == 1
+    assert worker.peers[0]["url"] == "http://ddo-env:2222"
+    assert worker.peers[0]["username"] == "admin"
+    assert worker.peers[0]["password"] == "secret"
+
+
+def test_env_peer_not_duplicated_when_also_in_config(monkeypatch):
+    """Env var peer is not added if it already appears in the config file peers list."""
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_URL", "http://ddo-2:2222")
+    worker = PeerSyncWorker(BASE_CONFIG)
+    # BASE_CONFIG already has http://ddo-2:2222 — must remain exactly one entry
+    urls = [p["url"] for p in worker.peers]
+    assert urls.count("http://ddo-2:2222") == 1
+
+
 def test_start_skips_when_disabled(caplog):
     worker = PeerSyncWorker({"enabled": False})
     worker.start()

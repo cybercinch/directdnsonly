@@ -323,9 +323,11 @@ Key differences from the upstream plugin:
 - Fully authoritative responses — correct AA flag and NXDOMAIN on misses
 - Wildcard record support (`*` entries served correctly)
 - NS records returned in the additional section
+- **Built-in file caching** — CoreDNS caches zone data from MySQL to local files, so queries are served from the cache if MySQL is temporarily unreachable. This also eliminates the per-query MySQL round-trip for frequently resolved names.
 
-Use the BIND backend if you want a zero-dependency setup with no custom CoreDNS
-build required.
+The file cache makes Topology B significantly more resilient to MySQL hiccups: CoreDNS keeps serving from cache while directdnsonly's retry queue waits for MySQL to recover.
+
+Use the NSD or BIND backend if you want a zero-dependency setup with no custom CoreDNS build required.
 
 ---
 
@@ -502,12 +504,20 @@ The built-in env var mapping targets the backend named `coredns_mysql`. For mult
 
 #### Peer sync
 
-| Config key | Environment variable | Default | Description |
-|---|---|---|---|
-| `peer_sync.enabled` | `DADNS_PEER_SYNC_ENABLED` | `false` | Enable background peer-to-peer zone sync |
-| `peer_sync.interval_minutes` | `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | How often each peer is polled |
+| Config key / Environment variable | Default | Description |
+|---|---|---|
+| `peer_sync.enabled` / `DADNS_PEER_SYNC_ENABLED` | `false` | Enable background peer-to-peer zone sync |
+| `peer_sync.interval_minutes` / `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | How often each peer is polled |
 
-> The `peer_sync.peers` list (peer URLs, credentials) requires a config file — it cannot be expressed as simple env vars.
+For a **single peer** (the typical two-node Topology C setup) the peer can be configured entirely via env vars — no config file required:
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `DADNS_PEER_SYNC_PEER_URL` | _(unset)_ | URL of the single peer (e.g. `http://ddo-2:2222`). When set, this peer is automatically appended to the peers list. |
+| `DADNS_PEER_SYNC_PEER_USERNAME` | `directdnsonly` | Basic auth username for the peer |
+| `DADNS_PEER_SYNC_PEER_PASSWORD` | _(empty)_ | Basic auth password for the peer |
+
+> For **multiple peers**, use a config file with the `peer_sync.peers` list. A peer defined via env var is deduped — if the same URL already appears in the config file it will not be added twice.
 
 ---
 
@@ -540,8 +550,11 @@ services:
       DADNS_APP_AUTH_PASSWORD: my-strong-secret
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
+      DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-mlb:2222
+      DADNS_PEER_SYNC_PEER_USERNAME: directdnsonly
+      DADNS_PEER_SYNC_PEER_PASSWORD: my-strong-secret
     volumes:
-      - ./config/syd:/app/config   # contains peer_sync.peers list
       - syd-data:/app/data
 
   directdnsonly-mlb:
@@ -553,8 +566,11 @@ services:
       DADNS_APP_AUTH_PASSWORD: my-strong-secret
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
+      DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-syd:2222
+      DADNS_PEER_SYNC_PEER_USERNAME: directdnsonly
+      DADNS_PEER_SYNC_PEER_PASSWORD: my-strong-secret
     volumes:
-      - ./config/mlb:/app/config   # contains peer_sync.peers list
       - mlb-data:/app/data
 
 volumes:

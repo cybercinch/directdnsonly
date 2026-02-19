@@ -19,6 +19,7 @@ Safety properties:
   with older peer data
 """
 import datetime
+import os
 import threading
 from loguru import logger
 import requests
@@ -36,7 +37,22 @@ class PeerSyncWorker:
     def __init__(self, peer_sync_config: dict):
         self.enabled = peer_sync_config.get("enabled", False)
         self.interval_seconds = peer_sync_config.get("interval_minutes", 15) * 60
-        self.peers = peer_sync_config.get("peers") or []
+        self.peers = list(peer_sync_config.get("peers") or [])
+
+        # Support single-peer config via env vars for env-var-only deployments.
+        # DADNS_PEER_SYNC_PEER_URL, DADNS_PEER_SYNC_PEER_USERNAME, DADNS_PEER_SYNC_PEER_PASSWORD
+        env_url = os.environ.get("DADNS_PEER_SYNC_PEER_URL", "").strip()
+        if env_url and not any(p.get("url") == env_url for p in self.peers):
+            self.peers.append(
+                {
+                    "url": env_url,
+                    "username": os.environ.get(
+                        "DADNS_PEER_SYNC_PEER_USERNAME", "directdnsonly"
+                    ),
+                    "password": os.environ.get("DADNS_PEER_SYNC_PEER_PASSWORD", ""),
+                }
+            )
+            logger.debug(f"[peer_sync] Added peer from env vars: {env_url}")
         self._stop_event = threading.Event()
         self._thread = None
 
