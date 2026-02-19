@@ -38,6 +38,7 @@ class ReconciliationWorker:
         self.verify_ssl = reconciliation_config.get("verify_ssl", True)
         self.ipp = int(reconciliation_config.get("ipp", 1000))
         self.dry_run = bool(reconciliation_config.get("dry_run", False))
+        self._initial_delay = reconciliation_config.get("initial_delay_minutes", 0) * 60
         self._stop_event = threading.Event()
         self._thread = None
 
@@ -58,9 +59,13 @@ class ReconciliationWorker:
         self._thread.start()
         server_names = [s.get("hostname", "?") for s in self.servers]
         mode = "DRY-RUN" if self.dry_run else "LIVE"
+        delay_str = (
+            f", initial_delay: {self._initial_delay // 60}m" if self._initial_delay else ""
+        )
         logger.info(
             f"Reconciliation poller started [{mode}] — "
-            f"interval: {self.interval_seconds // 60}m, "
+            f"interval: {self.interval_seconds // 60}m"
+            f"{delay_str}, "
             f"servers: {server_names}"
         )
         if self.dry_run:
@@ -83,6 +88,13 @@ class ReconciliationWorker:
     # ------------------------------------------------------------------
 
     def _run(self):
+        if self._initial_delay > 0:
+            logger.info(
+                f"[reconciler] Initial delay {self._initial_delay // 60}m — "
+                f"first reconciliation pass deferred"
+            )
+            if self._stop_event.wait(timeout=self._initial_delay):
+                return  # stopped cleanly during the initial delay
         logger.info("Reconciliation worker starting — running initial check now")
         self._reconcile_all()
         while not self._stop_event.wait(timeout=self.interval_seconds):

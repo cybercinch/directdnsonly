@@ -14,6 +14,8 @@ app:
 #  enabled: true
 #  dry_run: true             # log orphans but do NOT queue deletes — safe first-run mode
 #  interval_minutes: 60
+#  initial_delay_minutes: 0  # stagger first run when running multiple receivers behind a LB
+#                            # e.g. receiver-1: 0, receiver-2: 30 (half the interval)
 #  verify_ssl: true          # set false for self-signed DA certs
 #  ipp: 1000                 # items per page when polling DA (default 1000)
 #  directadmin_servers:

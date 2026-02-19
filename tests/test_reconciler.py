@@ -175,6 +175,17 @@ def test_no_servers_does_not_start(delete_queue):
     assert not w.is_alive
 
 
+def test_initial_delay_stored(delete_queue):
+    cfg = {**BASE_CONFIG, "initial_delay_minutes": 30}
+    w = ReconciliationWorker(delete_queue, cfg)
+    assert w._initial_delay == 30 * 60
+
+
+def test_zero_initial_delay_by_default(delete_queue):
+    w = ReconciliationWorker(delete_queue, BASE_CONFIG)
+    assert w._initial_delay == 0
+
+
 # ---------------------------------------------------------------------------
 # _heal_backends — Option C backend healing
 # ---------------------------------------------------------------------------
