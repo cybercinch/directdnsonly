@@ -3,6 +3,7 @@
 import datetime
 import json
 import pytest
+from sqlalchemy import select, func
 from unittest.mock import patch, MagicMock
 
 from directdnsonly.app.peer_sync import PeerSyncWorker
@@ -123,7 +124,9 @@ def test_sync_creates_new_local_record(patch_connect, monkeypatch):
 
     worker._sync_from_peer(_make_peer())
 
-    record = session.query(Domain).filter_by(domain="example.com").first()
+    record = session.execute(
+        select(Domain).filter_by(domain="example.com")
+    ).scalar_one_or_none()
     assert record is not None
     assert record.zone_data == ZONE_DATA
     assert record.zone_updated_at == NOW
@@ -152,7 +155,6 @@ def test_sync_updates_older_local_record(patch_connect, monkeypatch):
 
     worker._sync_from_peer(_make_peer())
 
-    from sqlalchemy import select
     record = session.execute(
         select(Domain).filter_by(domain="example.com")
     ).scalar_one_or_none()
@@ -187,7 +189,9 @@ def test_sync_skips_when_local_is_newer(patch_connect, monkeypatch):
 
     # zone_data fetch should not have been called
     assert not fetch_calls
-    record = session.query(Domain).filter_by(domain="example.com").first()
+    record = session.execute(
+        select(Domain).filter_by(domain="example.com")
+    ).scalar_one_or_none()
     assert record.zone_data == "newer local"
 
 
@@ -219,7 +223,7 @@ def test_sync_skips_peer_with_bad_status(patch_connect, monkeypatch):
     worker._sync_from_peer(_make_peer())
 
     # No records should have been created
-    assert session.query(Domain).count() == 0
+    assert session.execute(select(func.count()).select_from(Domain)).scalar() == 0
 
 
 def test_sync_skips_missing_zone_data_in_response(patch_connect, monkeypatch):
@@ -241,7 +245,7 @@ def test_sync_skips_missing_zone_data_in_response(patch_connect, monkeypatch):
 
     worker._sync_from_peer(_make_peer())
 
-    assert session.query(Domain).count() == 0
+    assert session.execute(select(func.count()).select_from(Domain)).scalar() == 0
 
 
 def test_sync_empty_peer_list(patch_connect, monkeypatch):
