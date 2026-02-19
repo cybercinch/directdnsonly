@@ -2,6 +2,7 @@ from typing import Dict, Type, Optional
 from .base import DNSBackend
 from .bind import BINDBackend
 from .coredns_mysql import CoreDNSMySQLBackend
+from .nsd import NSDBackend
 from directdnsonly.config import config
 from loguru import logger
 
@@ -11,6 +12,7 @@ class BackendRegistry:
         self._backend_types = {
             "bind": BINDBackend,
             "coredns_mysql": CoreDNSMySQLBackend,
+            "nsd": NSDBackend,
         }
         self._backend_instances: Dict[str, DNSBackend] = {}
         self._initialized = False

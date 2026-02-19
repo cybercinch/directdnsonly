@@ -2,13 +2,13 @@
 
 ## Deployment Topologies
 
-Two reference topologies are documented below. Choose the one that matches your infrastructure.
+Three reference topologies are documented below. Choose the one that matches your infrastructure.
 
 ---
 
-### Topology A — Dual BIND Instances (High-Availability / Multi-Server)
+### Topology A — Dual NSD/BIND Instances (High-Availability / Multi-Server)
 
-Two independent DirectDNSOnly containers, each running a bundled BIND9 instance. Both are registered as Extra DNS servers in the same DirectAdmin Multi-Server environment, so DA pushes every zone change to both simultaneously.
+Two independent DirectDNSOnly containers, each running a bundled DNS daemon (NSD by default, or BIND9). Both are registered as Extra DNS servers in the same DirectAdmin Multi-Server environment, so DA pushes every zone change to both simultaneously.
 
 ```
 DirectAdmin Multi-Server
@@ -65,7 +65,7 @@ dns:
 ```yaml
 services:
   directdnsonly-1:
-    image: guisea/directdnsonly:2.3.0
+    image: guisea/directdnsonly:2.5.0
     ports:
       - "2222:2222"   # DA pushes here
       - "53:53/udp"   # authoritative DNS
@@ -154,23 +154,103 @@ Adding a third data centre is a single stanza in the config — no code changes 
 
 ---
 
+### Topology C — Multi-Instance with Peer Sync (Most Robust)
+
+Multiple independent DirectDNSOnly containers, each with a single local DNS backend (NSD or CoreDNS MySQL), registered as separate Extra DNS servers in DirectAdmin Multi-Server. Peer sync provides eventual consistency — if one instance misses a DA push while it is offline, it recovers the missing zone data from a peer on the next sync interval.
+
+```
+DirectAdmin Multi-Server
+        │
+        ├─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-syd  (NSD or CoreDNS MySQL)
+        │                                     │
+        │                            Persistent Queue + zone_data store
+        │                            ├─ writes zone file / MySQL
+        │                            ├─ reloads daemon
+        │                            └─ retry on failure
+        │                                     │
+        │                             ◀──── peer sync ────▶
+        │                                     │
+        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-mlb  (NSD or CoreDNS MySQL)
+                                               │
+                                        Persistent Queue + zone_data store
+                                        ├─ writes zone file / MySQL
+                                        ├─ reloads daemon
+                                        └─ retry on failure
+```
+
+**Why this is the most robust topology:**
+
+- DA pushes to each instance independently — no single point of failure
+- No load balancer in the write path — a dead LB cannot silence both instances
+- Each instance serves DNS immediately from its own daemon
+- If SYD misses a push while offline, it pulls the newer zone from MLB on the next peer sync (default 15 minutes)
+- Peer sync is best-effort eventual consistency — deliberately simple, no consensus protocol
+
+#### Failure behaviour
+
+| Scenario | What happens |
+|---|---|
+| One instance down during DA push | Other instance(s) receive and serve the update. When the downed instance recovers, peer sync detects the stale/missing `zone_updated_at` and pulls the newer zone data from a peer. |
+| Both instances down during DA push | Both miss the push. When they recover, they sync from each other — the most recently updated peer wins per zone. No DA re-push needed. |
+| Peer offline | Peer sync silently skips unreachable peers. Syncs resume automatically when the peer recovers. |
+| Zone deleted from DA | Reconciliation poller detects the orphan and queues the delete on each instance independently. |
+
+#### `config/app.yml` — instance syd
+
+```yaml
+app:
+  auth_username: directdnsonly
+  auth_password: your-secret
+
+dns:
+  default_backend: nsd
+  backends:
+    nsd:
+      type: nsd
+      enabled: true
+      zones_dir: /etc/nsd/zones
+      nsd_conf: /etc/nsd/nsd.conf.d/zones.conf
+
+peer_sync:
+  enabled: true
+  interval_minutes: 15
+  peers:
+    - url: http://directdnsonly-mlb:2222
+      username: directdnsonly
+      password: your-secret
+
+reconciliation:
+  enabled: true
+  interval_minutes: 60
+  directadmin_servers:
+    - hostname: da.syd.example.com
+      port: 2222
+      username: admin
+      password: da-secret
+      ssl: true
+```
+
+Register each container as a separate Extra DNS server entry in DA → DNS Administration → Extra DNS Servers with the same credentials.
+
+---
+
 ### Topology Comparison
 
-| | Topology A — Dual BIND | Topology B — CoreDNS MySQL |
-|---|---|---|
-| **DNS server** | BIND9 (bundled in container) | CoreDNS (separate, reads MySQL) |
-| **Write path** | DA → each instance independently | DA → single instance → all backends |
-| **Zone storage** | Zone files on container disk | MySQL database rows |
-| **DA registration** | Two Extra DNS server entries | One Extra DNS server entry |
-| **Redundancy model** | Independent app+DNS units | One app, N database backends |
-| **Transient backend failure** | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) |
-| **Prolonged backend outage** | No auto-recovery — waits for next DA push to that zone | Reconciler healing pass re-pushes all missing zones using stored `zone_data` (no DA involvement) |
-| **Container down during push** | Zone missed entirely — no retry possible at DA level | Zone missed at DA level — same limitation |
-| **Cross-node consistency** | No sync between instances — drift until next DA push | All backends share same write path — reconciler enforces consistency |
-| **Orphan detection** | Yes — reconciler removes zones deleted from DA | Yes — reconciler removes zones deleted from DA |
-| **External DB required** | No | Yes (MySQL per CoreDNS node) |
-| **Horizontal scaling** | Add DA Extra DNS entries + deploy new containers | Add backend stanzas in `config/app.yml` |
-| **Best for** | Simple HA, no external DB | Multi-DC, stronger consistency guarantees |
+| | Topology A — Dual NSD/BIND | Topology B — CoreDNS MySQL | Topology C — Multi-Instance + Peer Sync |
+|---|---|---|---|
+| **DNS server** | NSD or BIND9 (bundled) | CoreDNS (separate, reads MySQL) | NSD or CoreDNS MySQL (per instance) |
+| **Write path** | DA → each instance independently | DA → single instance → all backends | DA → each instance independently |
+| **Zone storage** | Zone files on container disk | MySQL database rows | Zone files or MySQL + SQLite zone_data store |
+| **DA registration** | Two Extra DNS server entries | One Extra DNS server entry | One entry per instance |
+| **Redundancy model** | Independent app+DNS units | One app, N database backends | Independent instances + peer sync |
+| **Transient backend failure** | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) |
+| **Prolonged backend outage** | No auto-recovery — waits for next DA push | Reconciler healing pass re-pushes all missing zones | Peer sync pulls missed zones from a healthy peer |
+| **Container down during push** | Zone missed entirely | Zone missed at DA level | Zone missed at DA level; recovered via peer sync |
+| **Cross-node consistency** | No sync between instances | All backends share same write path | Peer sync provides eventual consistency |
+| **Orphan detection** | Yes — reconciler | Yes — reconciler | Yes — reconciler (per instance) |
+| **External DB required** | No | Yes (MySQL per CoreDNS node) | No (NSD) or Yes (CoreDNS MySQL) |
+| **Horizontal scaling** | Add DA Extra DNS entries + containers | Add backend stanzas in config | Add DA Extra DNS entries + containers + peer list |
+| **Best for** | Simple HA, no external DB | Multi-DC, stronger consistency | Most robust HA — survives extended outages without DA re-push |
 
 ---
 
@@ -194,9 +274,11 @@ Adding a third data centre is a single stanza in the config — no code changes 
 
 ---
 
-### Is there a lighter alternative to bundle instead of BIND9?
+### Bundled DNS daemons — NSD and BIND9
 
-Yes. **NSD (Name Server Daemon)** from NLnet Labs is the strongest candidate for a drop-in replacement:
+The container image ships with **both NSD and BIND9** installed. The entrypoint reads your config and starts only the daemon that matches the configured backend type. CoreDNS MySQL deployments start neither.
+
+**NSD (Name Server Daemon)** from NLnet Labs is the default recommendation:
 
 | | BIND9 | NSD | Knot DNS |
 |---|---|---|---|
@@ -216,12 +298,10 @@ Yes. **NSD (Name Server Daemon)** from NLnet Labs is the strongest candidate for
 
 **Summary recommendation:**
 
-- **Today, ~100–300 zones, no external DB:** NSD is a better bundled choice than BIND9 — lighter, faster, simpler config for authoritative-only use.
+- **Up to ~300 zones, no external DB:** Use the NSD backend (bundled) — lighter, faster, authoritative-only, same zone file format as BIND.
 - **300–1 000+ zones:** CoreDNS MySQL wins — zone data in MySQL means no daemon reload at all.
 - **Need zero-interruption zone swaps:** Knot DNS.
 - **Need an HTTP API for zone management (no file I/O):** PowerDNS Authoritative with its native HTTP API and file/SQLite backend.
-
-> NSD backend support is a planned future addition. A pull request is welcome — the implementation is straightforward since zone file format and reload semantics are nearly identical to the existing BIND backend.
 
 ---
 
@@ -250,10 +330,11 @@ build required.
 ---
 
 ## Features
-- Multi-backend DNS management (BIND, CoreDNS MySQL)
+- Multi-backend DNS management (NSD, BIND, CoreDNS MySQL)
 - Parallel backend dispatch — all enabled backends updated simultaneously
 - Persistent queue — zone updates survive restarts
 - Automatic record-count verification and drift reconciliation
+- Peer sync — eventual consistency between directdnsonly instances
 - Thread-safe operations
 - Loguru-based logging
 
@@ -340,33 +421,249 @@ dns:
 
 ## Configuration
 
-Edit `config/app.yml` for backend settings. Credentials can be overridden via
-environment variables using the `DADNS_` prefix (e.g.
-`DADNS_APP_AUTH_PASSWORD`).
+DirectDNSOnly uses [Vyper](https://github.com/sn3d/vyper-py) for configuration. Settings are resolved in this priority order (highest wins):
 
-### Config Files
-#### `config/app.yml`
+1. **Environment variables** — `DADNS_` prefix, dots replaced with underscores (e.g. `DADNS_APP_AUTH_PASSWORD`)
+2. **Config file** — `app.yml` searched in `/etc/directdnsonly`, `.`, `./config`, then the bundled default
+3. **Built-in defaults** (shown in the table below)
+
+**A config file is entirely optional.** Every scalar setting can be provided through environment variables alone.
+
+---
+
+### Configuration Reference
+
+#### Core
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `log_level` | `DADNS_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warning`, `error` |
+| `timezone` | `DADNS_TIMEZONE` | `Pacific/Auckland` | Timezone for log timestamps |
+| `queue_location` | `DADNS_QUEUE_LOCATION` | `./data/queues` | Path for the persistent zone-update queue |
+
+#### App (HTTP server)
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `app.auth_username` | `DADNS_APP_AUTH_USERNAME` | `directdnsonly` | Basic auth username for all API routes (including `/internal`) |
+| `app.auth_password` | `DADNS_APP_AUTH_PASSWORD` | `changeme` | Basic auth password — **always override in production** |
+| `app.listen_port` | `DADNS_APP_LISTEN_PORT` | `2222` | TCP port the HTTP server binds to |
+| `app.ssl_enable` | `DADNS_APP_SSL_ENABLE` | `false` | Enable TLS on the HTTP server |
+| `app.proxy_support` | `DADNS_APP_PROXY_SUPPORT` | `true` | Trust `X-Forwarded-For` from a reverse proxy |
+| `app.proxy_support_base` | `DADNS_APP_PROXY_SUPPORT_BASE` | `http://127.0.0.1` | Trusted proxy base address |
+
+#### Datastore (internal SQLite)
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `datastore.type` | `DADNS_DATASTORE_TYPE` | `sqlite` | Internal datastore type (only `sqlite` supported) |
+| `datastore.db_location` | `DADNS_DATASTORE_DB_LOCATION` | `data/directdns.db` | Path to the SQLite database file |
+
+#### DNS backends — BIND
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `dns.default_backend` | `DADNS_DNS_DEFAULT_BACKEND` | _(none)_ | Name of the primary backend (used for status/health reporting) |
+| `dns.backends.bind.enabled` | `DADNS_DNS_BACKENDS_BIND_ENABLED` | `false` | Enable the bundled BIND9 backend |
+| `dns.backends.bind.zones_dir` | `DADNS_DNS_BACKENDS_BIND_ZONES_DIR` | `/etc/named/zones` | Directory where zone files are written |
+| `dns.backends.bind.named_conf` | `DADNS_DNS_BACKENDS_BIND_NAMED_CONF` | `/etc/named.conf.local` | `named.conf` include file managed by directdnsonly |
+
+#### DNS backends — NSD
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `dns.backends.nsd.enabled` | `DADNS_DNS_BACKENDS_NSD_ENABLED` | `false` | Enable the NSD backend |
+| `dns.backends.nsd.zones_dir` | `DADNS_DNS_BACKENDS_NSD_ZONES_DIR` | `/etc/nsd/zones` | Directory where zone files are written |
+| `dns.backends.nsd.nsd_conf` | `DADNS_DNS_BACKENDS_NSD_NSD_CONF` | `/etc/nsd/nsd.conf.d/zones.conf` | NSD zone include file managed by directdnsonly |
+
+#### DNS backends — CoreDNS MySQL
+
+The built-in env var mapping targets the backend named `coredns_mysql`. For multiple named CoreDNS backends (e.g. `coredns_dc1`, `coredns_dc2`) you must use a config file — see [Multi-backend via config file](#multi-backend-via-config-file) below.
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `dns.backends.coredns_mysql.enabled` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_ENABLED` | `false` | Enable the CoreDNS MySQL backend |
+| `dns.backends.coredns_mysql.host` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_HOST` | `localhost` | MySQL host |
+| `dns.backends.coredns_mysql.port` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_PORT` | `3306` | MySQL port |
+| `dns.backends.coredns_mysql.database` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_DATABASE` | `coredns` | MySQL database name |
+| `dns.backends.coredns_mysql.username` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_USERNAME` | `coredns` | MySQL username |
+| `dns.backends.coredns_mysql.password` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_PASSWORD` | _(empty)_ | MySQL password |
+
+#### Reconciliation poller
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `reconciliation.enabled` | `DADNS_RECONCILIATION_ENABLED` | `false` | Enable the background reconciliation poller |
+| `reconciliation.dry_run` | `DADNS_RECONCILIATION_DRY_RUN` | `false` | Log orphans but do not queue deletes (safe first-run mode) |
+| `reconciliation.interval_minutes` | `DADNS_RECONCILIATION_INTERVAL_MINUTES` | `60` | How often the poller runs |
+| `reconciliation.verify_ssl` | `DADNS_RECONCILIATION_VERIFY_SSL` | `true` | Verify TLS certificates when querying DirectAdmin |
+
+> The `reconciliation.directadmin_servers` list (DA hostnames, credentials) requires a config file — it cannot be expressed as simple env vars.
+
+#### Peer sync
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `peer_sync.enabled` | `DADNS_PEER_SYNC_ENABLED` | `false` | Enable background peer-to-peer zone sync |
+| `peer_sync.interval_minutes` | `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | How often each peer is polled |
+
+> The `peer_sync.peers` list (peer URLs, credentials) requires a config file — it cannot be expressed as simple env vars.
+
+---
+
+### Environment-variable-only setup
+
+No config file is needed for single-backend deployments. Pass all settings as container environment variables.
+
+#### Topology A/C — NSD backend (env vars only, recommended)
+
+```bash
+DADNS_APP_AUTH_PASSWORD=my-strong-secret
+DADNS_DNS_DEFAULT_BACKEND=nsd
+DADNS_DNS_BACKENDS_NSD_ENABLED=true
+DADNS_DNS_BACKENDS_NSD_ZONES_DIR=/etc/nsd/zones
+DADNS_DNS_BACKENDS_NSD_NSD_CONF=/etc/nsd/nsd.conf.d/zones.conf
+DADNS_QUEUE_LOCATION=/app/data/queues
+DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
+```
+
+`docker-compose.yml` snippet (Topology C — two instances with peer sync via config file):
+
 ```yaml
-timezone: Pacific/Auckland
-log_level: INFO
-queue_location: ./data/queues
+services:
+  directdnsonly-syd:
+    image: guisea/directdnsonly:2.5.0
+    ports:
+      - "2222:2222"
+      - "53:53/udp"
+    environment:
+      DADNS_APP_AUTH_PASSWORD: my-strong-secret
+      DADNS_DNS_DEFAULT_BACKEND: nsd
+      DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
+    volumes:
+      - ./config/syd:/app/config   # contains peer_sync.peers list
+      - syd-data:/app/data
 
+  directdnsonly-mlb:
+    image: guisea/directdnsonly:2.5.0
+    ports:
+      - "2223:2222"
+      - "54:53/udp"
+    environment:
+      DADNS_APP_AUTH_PASSWORD: my-strong-secret
+      DADNS_DNS_DEFAULT_BACKEND: nsd
+      DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
+    volumes:
+      - ./config/mlb:/app/config   # contains peer_sync.peers list
+      - mlb-data:/app/data
+
+volumes:
+  syd-data:
+  mlb-data:
+```
+
+#### Topology A — BIND backend (env vars only)
+
+```bash
+# docker run / docker-compose environment:
+DADNS_APP_AUTH_USERNAME=directdnsonly
+DADNS_APP_AUTH_PASSWORD=my-strong-secret
+DADNS_DNS_DEFAULT_BACKEND=bind
+DADNS_DNS_BACKENDS_BIND_ENABLED=true
+DADNS_DNS_BACKENDS_BIND_ZONES_DIR=/etc/named/zones
+DADNS_DNS_BACKENDS_BIND_NAMED_CONF=/etc/named/named.conf.local
+DADNS_QUEUE_LOCATION=/app/data/queues
+DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
+```
+
+`docker-compose.yml` snippet:
+
+```yaml
+services:
+  directdnsonly:
+    image: guisea/directdnsonly:2.5.0
+    ports:
+      - "2222:2222"
+      - "53:53/udp"
+    environment:
+      DADNS_APP_AUTH_PASSWORD: my-strong-secret
+      DADNS_DNS_DEFAULT_BACKEND: bind
+      DADNS_DNS_BACKENDS_BIND_ENABLED: "true"
+      DADNS_DNS_BACKENDS_BIND_ZONES_DIR: /etc/named/zones
+      DADNS_DNS_BACKENDS_BIND_NAMED_CONF: /etc/named/named.conf.local
+    volumes:
+      - ddo-data:/app/data
+
+volumes:
+  ddo-data:
+```
+
+#### Topology B — single CoreDNS MySQL backend (env vars only)
+
+```bash
+DADNS_APP_AUTH_PASSWORD=my-strong-secret
+DADNS_DNS_DEFAULT_BACKEND=coredns_mysql
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_ENABLED=true
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_HOST=mysql.dc1.internal
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_PORT=3306
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_DATABASE=coredns
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_USERNAME=coredns
+DADNS_DNS_BACKENDS_COREDNS_MYSQL_PASSWORD=db-secret
+DADNS_QUEUE_LOCATION=/app/data/queues
+DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
+```
+
+---
+
+### Multi-backend via config file
+
+When you need **multiple named backends** (e.g. two CoreDNS MySQL instances in different data centres), **peer sync**, or **reconciliation with DA servers**, use a config file mounted at `/app/config/app.yml` (or `/etc/directdnsonly/app.yml`):
+
+```yaml
 app:
   auth_username: directdnsonly
-  auth_password: changeme   # override with DADNS_APP_AUTH_PASSWORD
+  auth_password: my-strong-secret   # or use DADNS_APP_AUTH_PASSWORD
 
 dns:
-  default_backend: bind
+  default_backend: coredns_dc1
   backends:
-    bind:
+    coredns_dc1:
+      type: coredns_mysql
       enabled: true
-      zones_dir: ./data/zones
-      named_conf: ./data/named.conf.include
-
-    coredns_mysql:
-      enabled: true
-      host: "127.0.0.1"
+      host: 10.0.0.80
       port: 3306
-      database: "coredns"
-      username: "coredns"
-      password: "password"
+      database: coredns
+      username: coredns
+      password: db-secret-dc1
+
+    coredns_dc2:
+      type: coredns_mysql
+      enabled: true
+      host: 10.0.1.29
+      port: 3306
+      database: coredns
+      username: coredns
+      password: db-secret-dc2
+
+reconciliation:
+  enabled: true
+  dry_run: false
+  interval_minutes: 60
+  verify_ssl: true
+  directadmin_servers:
+    - hostname: da1.example.com
+      port: 2222
+      username: admin
+      password: da-secret
+      ssl: true
+
+peer_sync:
+  enabled: true
+  interval_minutes: 15
+  peers:
+    - url: http://ddo-2:2222
+      username: directdnsonly
+      password: my-strong-secret
+```
+
+Credentials in the config file can still be overridden by env vars — for example, `DADNS_APP_AUTH_PASSWORD` overrides `app.auth_password` regardless of what the file says.

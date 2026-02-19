@@ -12,8 +12,8 @@ def load_config() -> Vyper:
     v.set_config_name("app")  # Looks for app.yaml/app.yml
     # User-supplied paths checked first so they override the bundled defaults
     v.add_config_path("/etc/directdnsonly")  # system-level mount
-    v.add_config_path(".")                   # CWD (e.g. /app when run directly)
-    v.add_config_path("./config")            # docker-compose volume mount at /app/config
+    v.add_config_path(".")  # CWD (e.g. /app when run directly)
+    v.add_config_path("./config")  # docker-compose volume mount at /app/config
     # Bundled config colocated with this module — last-resort fallback
     v.add_config_path(str(Path(__file__).parent))
     v.set_env_prefix("DADNS")
@@ -42,6 +42,10 @@ def load_config() -> Vyper:
     v.set_default("dns.backends.bind.enabled", False)
     v.set_default("dns.backends.bind.zones_dir", "/etc/named/zones")
     v.set_default("dns.backends.bind.named_conf", "/etc/named.conf.local")
+
+    v.set_default("dns.backends.nsd.enabled", False)
+    v.set_default("dns.backends.nsd.zones_dir", "/etc/nsd/zones")
+    v.set_default("dns.backends.nsd.nsd_conf", "/etc/nsd/nsd.conf.d/zones.conf")
 
     v.set_default("dns.backends.coredns_mysql.enabled", False)
     v.set_default("dns.backends.coredns_mysql.host", "localhost")
