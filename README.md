@@ -174,6 +174,57 @@ Adding a third data centre is a single stanza in the config — no code changes 
 
 ---
 
+## DNS Server Resource and Scale Guide
+
+### BIND9 vs CoreDNS MySQL — resource profile
+
+| | BIND9 (bundled) | CoreDNS + MySQL |
+|---|---|---|
+| **Base memory** | ~13–15 MB | ~20–30 MB (CoreDNS binary) + MySQL process |
+| **Per-zone overhead** | ~300 bytes per resource record in memory | Schema rows in MySQL; CoreDNS itself holds no zone state |
+| **100-zone deployment** | ~30–60 MB total | ~80–150 MB (CoreDNS + MySQL combined) |
+| **500-zone deployment** | ~100–300 MB total | ~100–200 MB (zone data lives in MySQL, not CoreDNS) |
+| **Zone reload** | `rndc reload <zone>` — per-zone is fast; full reload blocks queries for seconds at large counts | No reload needed — CoreDNS queries MySQL at resolution time |
+| **Zone update latency** | File write + `rndc reload` — typically <100 ms for a single zone | Write to MySQL — immediately visible to CoreDNS on next query |
+| **CPU on reload** | Spikes on full `rndc reload`; grows linearly with zone count | No reload CPU spike; MySQL write is the only cost |
+| **Query throughput** | High — zones loaded into memory | Slightly lower — each query hits MySQL (mitigated by MySQL query cache / connection pooling) |
+| **Scale ceiling** | Degrades past ~1 000 zones: memory climbs, full reloads take 120 s+ | Scales with MySQL — thousands of zones with no DNS-process impact |
+
+**Rule of thumb:** Below ~300 zones BIND9 and CoreDNS MySQL are broadly comparable. Above ~500 zones, CoreDNS MySQL has a significant advantage because zone data lives entirely in the database — adding a new zone costs one MySQL INSERT, not a daemon reload.
+
+---
+
+### Is there a lighter alternative to bundle instead of BIND9?
+
+Yes. **NSD (Name Server Daemon)** from NLnet Labs is the strongest candidate for a drop-in replacement:
+
+| | BIND9 | NSD | Knot DNS |
+|---|---|---|---|
+| **Design focus** | Everything (authoritative + recursive + DNSSEC + ...) | Authoritative only | Authoritative only |
+| **Base memory** | ~13–15 MB | ~5–10 MB | ~10–15 MB |
+| **500-zone memory** | ~100–300 MB | <100 MB (estimated) | ~100–200 MB (3× zone text size) |
+| **Zone update** | `rndc reload <zone>` | `nsd-control reload` | `knotc zone-reload` (atomic via RCU — zero query interruption) |
+| **Config format** | `named.conf` / zone files | `nsd.conf` / zone files (nearly identical format) | `knot.conf` / zone files |
+| **Docker image** | ~150–200 MB | ~30–50 MB Alpine | ~40–60 MB Alpine |
+| **Recursive queries** | Yes (if configured) | No | No |
+| **Throughput** | Baseline | ~2–5× BIND9 | ~5–10× BIND9 (2.2 Mqps at 32 cores) |
+| **Production use** | Wide adoption | TLD servers (`.nl`, `.se`), major registries | CZ.NIC, Cloudflare internal testing |
+
+**NSD** would slot almost directly into the existing BIND backend implementation — zone files have the same RFC 1035 format, and `nsd-control reload` is the equivalent of `rndc reload`. The main implementation difference is the daemon config file (`nsd.conf` vs `named.conf`) and the absence of `named.conf.local`-style zone includes (NSD uses pattern-based config).
+
+**Knot DNS** is worth considering if seamless zone updates matter: its RCU (Read-Copy-Update) mechanism serves the old zone to in-flight queries while atomically swapping in the new one — there is no window where queries see a partially-loaded zone. It is meaningfully heavier than NSD at moderate zone counts but the best performer at high scale.
+
+**Summary recommendation:**
+
+- **Today, ~100–300 zones, no external DB:** NSD is a better bundled choice than BIND9 — lighter, faster, simpler config for authoritative-only use.
+- **300–1 000+ zones:** CoreDNS MySQL wins — zone data in MySQL means no daemon reload at all.
+- **Need zero-interruption zone swaps:** Knot DNS.
+- **Need an HTTP API for zone management (no file I/O):** PowerDNS Authoritative with its native HTTP API and file/SQLite backend.
+
+> NSD backend support is a planned future addition. A pull request is welcome — the implementation is straightforward since zone file format and reload semantics are nearly identical to the existing BIND backend.
+
+---
+
 ## CoreDNS MySQL Backend — Required Fork
 
 The `coredns_mysql` backend writes zones to a MySQL database that CoreDNS reads
