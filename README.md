@@ -303,6 +303,8 @@ The container image ships with **both NSD and BIND9** installed. The entrypoint 
 - **Need zero-interruption zone swaps:** Knot DNS (RCU — serves old zone to in-flight queries while atomically swapping in the new one).
 - **Need an HTTP API for zone management:** PowerDNS Authoritative with its native HTTP API.
 
+> **Note:** Knot DNS and PowerDNS backends are **not implemented** in directdnsonly — they are listed here as architectural context only. Implemented backends: `nsd`, `bind`, `coredns_mysql`. Pull requests for additional backends are welcome.
+
 ---
 
 ## CoreDNS MySQL Backend — Required Fork
