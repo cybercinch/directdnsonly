@@ -250,7 +250,7 @@ Register each container as a separate Extra DNS server entry in DA → DNS Admin
 | **Orphan detection** | Yes — reconciler | Yes — reconciler | Yes — reconciler (per instance) |
 | **External DB required** | No | Yes (MySQL per CoreDNS node) | No (NSD) or Yes (CoreDNS MySQL) |
 | **Horizontal scaling** | Add DA Extra DNS entries + containers | Add backend stanzas in config | Add DA Extra DNS entries + containers + peer list |
-| **Best for** | Simple HA, no external DB | Multi-DC, stronger consistency | Most robust HA — survives extended outages without DA re-push |
+| **Best for** | Simple HA, no external DB | Best overall — resilient writes (retry queue) + resilient reads (CoreDNS cache fallback), no daemon reloads, scales to thousands of zones | Most robust HA — resilient at every layer, survives extended outages without DA re-push |
 
 ---
 
@@ -298,10 +298,10 @@ The container image ships with **both NSD and BIND9** installed. The entrypoint 
 
 **Summary recommendation:**
 
-- **Up to ~300 zones, no external DB:** Use the NSD backend (bundled) — lighter, faster, authoritative-only, same zone file format as BIND.
-- **300–1 000+ zones:** CoreDNS MySQL wins — zone data in MySQL means no daemon reload at all.
-- **Need zero-interruption zone swaps:** Knot DNS.
-- **Need an HTTP API for zone management (no file I/O):** PowerDNS Authoritative with its native HTTP API and file/SQLite backend.
+- **Any scale, external DB available:** CoreDNS MySQL ([cybercinch fork](https://github.com/cybercinch/coredns_mysql_extend)) wins at every zone count. Connection pooling, JSON cache fallback, health monitoring, and zero-downtime operation during DB maintenance make it the most resilient choice regardless of size. No daemon reload ever needed — a zone write is a MySQL INSERT.
+- **No external DB, simplicity first:** NSD (bundled) — lightweight, fast, authoritative-only, same RFC 1035 zone file format as BIND.
+- **Need zero-interruption zone swaps:** Knot DNS (RCU — serves old zone to in-flight queries while atomically swapping in the new one).
+- **Need an HTTP API for zone management:** PowerDNS Authoritative with its native HTTP API.
 
 ---
 
