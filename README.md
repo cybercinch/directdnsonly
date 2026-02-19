@@ -28,6 +28,13 @@ DirectAdmin Multi-Server
 
 **Each instance is completely independent** — no shared state, no cross-talk. Redundancy comes from DA pushing to both. If one container goes down, DA continues to push to the other.
 
+> **DNS consistency note:** DirectAdmin pushes to each Extra DNS server sequentially, not atomically. Two brief consistency windows exist:
+>
+> - **Transient gap** — between the first and second push completing, the two instances will return different answers. This is typically sub-second and resolves on its own.
+> - **Permanent drift** — if the push to one instance fails permanently (network outage, container down), that instance will serve stale or missing zone data until DA retries or the zone is updated again. The built-in reconciliation poller detects *orphaned zones* (present in our DB but deleted from DA) but does **not** compare zone content between instances.
+>
+> For workloads where split-brain DNS is unacceptable, use Topology B (single write path → multiple MySQL replicas) instead.
+
 #### `config/app.yml` — instance 1
 
 ```yaml
@@ -131,6 +138,30 @@ Adding a third data centre is a single stanza in the config — no code changes 
 | Failure mode | One container can go down | MySQL connectivity required |
 | Horizontal scaling | Add more DA Extra DNS entries | Add more MySQL backends in config |
 | Best for | Simple HA, no external DB | Multi-DC, existing CoreDNS fleet |
+
+---
+
+## CoreDNS MySQL Backend — Required Fork
+
+The `coredns_mysql` backend writes zones to a MySQL database that CoreDNS reads
+at query time. **Vanilla CoreDNS with a stock MySQL plugin is not sufficient** —
+out of the box it does not act as a fully authoritative server, does not return
+NS records in the additional section, does not set the AA flag, and does not
+handle wildcard records.
+
+This project is designed to work with a patched fork that resolves all of those
+issues:
+
+**[cybercinch/coredns_mysql_extend](https://github.com/cybercinch/coredns_mysql_extend)**
+
+Key differences from the upstream plugin:
+
+- Fully authoritative responses — correct AA flag and NXDOMAIN on misses
+- Wildcard record support (`*` entries served correctly)
+- NS records returned in the additional section
+
+Use the BIND backend if you want a zero-dependency setup with no custom CoreDNS
+build required.
 
 ---
 

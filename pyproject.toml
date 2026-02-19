@@ -1,6 +1,6 @@
 [project]
 name = "directdnsonly"
-version = "2.2.0"
+version = "2.3.0"
 description = "DNS Management System - DirectAdmin to multiple backends"
 authors = [
     {name = "Aaron Guise",email = "aaron@guise.net.nz"}

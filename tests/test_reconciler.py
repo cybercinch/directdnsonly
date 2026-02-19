@@ -2,7 +2,7 @@
 
 import pytest
 from queue import Queue
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from directdnsonly.app.reconciler import ReconciliationWorker
 from directdnsonly.app.db.models import Domain
@@ -173,3 +173,129 @@ def test_no_servers_does_not_start(delete_queue):
     w = ReconciliationWorker(delete_queue, cfg)
     w.start()
     assert not w.is_alive
+
+
+# ---------------------------------------------------------------------------
+# _heal_backends — Option C backend healing
+# ---------------------------------------------------------------------------
+
+
+def _make_backend_registry(zone_exists_return: bool):
+    """Build a mock backend_registry with one backend whose zone_exists returns
+    the given value."""
+    backend = MagicMock()
+    backend.zone_exists.return_value = zone_exists_return
+    registry = MagicMock()
+    registry.get_available_backends.return_value = {"coredns": backend}
+    return registry, backend
+
+
+def test_heal_queues_zone_missing_from_backend(delete_queue, patch_connect):
+    save_queue = Queue()
+    registry, backend = _make_backend_registry(zone_exists_return=False)
+
+    patch_connect.add(
+        Domain(
+            domain="missing.com",
+            hostname="da1.example.com",
+            username="admin",
+            zone_data="; zone file",
+        )
+    )
+    patch_connect.commit()
+
+    w = ReconciliationWorker(
+        delete_queue, BASE_CONFIG, save_queue=save_queue, backend_registry=registry
+    )
+    w._heal_backends()
+
+    assert not save_queue.empty()
+    item = save_queue.get_nowait()
+    assert item["domain"] == "missing.com"
+    assert item["failed_backends"] == ["coredns"]
+    assert item["source"] == "reconciler_heal"
+    assert item["zone_file"] == "; zone file"
+
+
+def test_heal_skips_domains_without_zone_data(delete_queue, patch_connect):
+    save_queue = Queue()
+    registry, _ = _make_backend_registry(zone_exists_return=False)
+
+    patch_connect.add(
+        Domain(domain="nodata.com", hostname="da1.example.com", username="admin", zone_data=None)
+    )
+    patch_connect.commit()
+
+    w = ReconciliationWorker(
+        delete_queue, BASE_CONFIG, save_queue=save_queue, backend_registry=registry
+    )
+    w._heal_backends()
+
+    assert save_queue.empty()
+
+
+def test_heal_skips_when_all_backends_have_zone(delete_queue, patch_connect):
+    save_queue = Queue()
+    registry, _ = _make_backend_registry(zone_exists_return=True)
+
+    patch_connect.add(
+        Domain(
+            domain="present.com",
+            hostname="da1.example.com",
+            username="admin",
+            zone_data="; zone file",
+        )
+    )
+    patch_connect.commit()
+
+    w = ReconciliationWorker(
+        delete_queue, BASE_CONFIG, save_queue=save_queue, backend_registry=registry
+    )
+    w._heal_backends()
+
+    assert save_queue.empty()
+
+
+def test_heal_dry_run_does_not_queue(delete_queue, patch_connect):
+    save_queue = Queue()
+    registry, _ = _make_backend_registry(zone_exists_return=False)
+
+    patch_connect.add(
+        Domain(
+            domain="dry.com",
+            hostname="da1.example.com",
+            username="admin",
+            zone_data="; zone file",
+        )
+    )
+    patch_connect.commit()
+
+    cfg = {**BASE_CONFIG, "dry_run": True}
+    w = ReconciliationWorker(
+        delete_queue, cfg, save_queue=save_queue, backend_registry=registry
+    )
+    w._heal_backends()
+
+    assert save_queue.empty()
+
+
+def test_heal_skipped_when_no_registry(delete_queue, patch_connect):
+    """_heal_backends should not run when backend_registry is None."""
+    save_queue = Queue()
+
+    patch_connect.add(
+        Domain(
+            domain="noregistry.com",
+            hostname="da1.example.com",
+            username="admin",
+            zone_data="; zone file",
+        )
+    )
+    patch_connect.commit()
+
+    w = ReconciliationWorker(delete_queue, BASE_CONFIG, save_queue=save_queue)
+    # Should not raise; healing is silently skipped
+    with _patch_da({"noregistry.com"}):
+        w._reconcile_all()
+
+    assert save_queue.empty()

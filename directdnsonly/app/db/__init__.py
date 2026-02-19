@@ -1,11 +1,30 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from vyper import v
+from loguru import logger
 
 import datetime
 
 Base = declarative_base()
+
+
+def _migrate(engine):
+    """Apply additive schema migrations for columns added after initial release."""
+    migrations = [
+        ("domains", "zone_data",       "ALTER TABLE domains ADD COLUMN zone_data TEXT"),
+        ("domains", "zone_updated_at", "ALTER TABLE domains ADD COLUMN zone_updated_at DATETIME"),
+    ]
+    with engine.connect() as conn:
+        for table, column, ddl in migrations:
+            try:
+                conn.execute(text(f"SELECT {column} FROM {table} LIMIT 1"))
+            except Exception:
+                try:
+                    conn.execute(text(ddl))
+                    logger.info(f"[db] Migration applied: added {table}.{column}")
+                except Exception as exc:
+                    logger.warning(f"[db] Migration skipped ({table}.{column}): {exc}")
 
 
 def connect(dbtype="sqlite", **kwargs):
@@ -19,6 +38,7 @@ def connect(dbtype="sqlite", **kwargs):
                 "sqlite:///" + db_location, connect_args={"check_same_thread": False}
             )
             Base.metadata.create_all(engine)
+            _migrate(engine)
             return sessionmaker(bind=engine)()
     elif dbtype == "mysql":
         # Start a MySQL engine
@@ -50,6 +70,7 @@ def connect(dbtype="sqlite", **kwargs):
                 + db_name
             )
             Base.metadata.create_all(engine)
+            _migrate(engine)
             return sessionmaker(bind=engine)()
     else:
         raise Exception("Unknown/unimplemented database type: {}".format(dbtype))

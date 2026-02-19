@@ -11,6 +11,10 @@ class ReconciliationWorker:
     """Periodically polls configured DirectAdmin servers and queues deletes
     for any zones in our DB that no longer exist in DirectAdmin.
 
+    Also runs an Option C backend healing pass: for each zone with stored
+    zone_data, checks every backend for presence and re-queues any that are
+    missing (e.g. after a prolonged backend outage).
+
     Safety rules:
     - If a DA server is unreachable, skip it entirely — never delete on uncertainty
     - Only touches domains registered via DaDNS (present in our `domains` table)
@@ -18,8 +22,16 @@ class ReconciliationWorker:
     - Pushes to the existing delete_queue so the full delete path is exercised
     """
 
-    def __init__(self, delete_queue, reconciliation_config: dict):
+    def __init__(
+        self,
+        delete_queue,
+        reconciliation_config: dict,
+        save_queue=None,
+        backend_registry=None,
+    ):
         self.delete_queue = delete_queue
+        self.save_queue = save_queue
+        self.backend_registry = backend_registry
         self.enabled = reconciliation_config.get("enabled", False)
         self.interval_seconds = reconciliation_config.get("interval_minutes", 60) * 60
         self.servers = reconciliation_config.get("directadmin_servers") or []
@@ -180,3 +192,73 @@ class ReconciliationWorker:
                 f"[reconciler] Reconciliation pass complete — "
                 f"{total_queued} domain(s) queued for deletion"
             )
+
+        # Option C: heal backends that are missing zones
+        if self.save_queue is not None and self.backend_registry is not None:
+            self._heal_backends()
+
+    def _heal_backends(self):
+        """Check every backend for zone presence and re-queue any zone that is
+        missing from one or more backends, using the stored zone_data as the
+        authoritative source.  This corrects backends that missed pushes due to
+        downtime without waiting for DirectAdmin to re-send the zone.
+        """
+        backends = self.backend_registry.get_available_backends()
+        if not backends:
+            return
+
+        session = connect()
+        try:
+            domains = (
+                session.query(Domain)
+                .filter(Domain.zone_data.isnot(None))
+                .all()
+            )
+            if not domains:
+                logger.debug("[reconciler] Healing pass: no zone_data stored yet — skipping")
+                return
+
+            healed = 0
+            for record in domains:
+                missing = []
+                for backend_name, backend in backends.items():
+                    try:
+                        if not backend.zone_exists(record.domain):
+                            missing.append(backend_name)
+                    except Exception as exc:
+                        logger.warning(
+                            f"[reconciler] heal: zone_exists check failed for "
+                            f"{record.domain} on {backend_name}: {exc}"
+                        )
+
+                if missing:
+                    mode = "[DRY-RUN] Would heal" if self.dry_run else "Healing"
+                    logger.warning(
+                        f"[reconciler] {mode} — {record.domain} missing from "
+                        f"{missing}; re-queuing with stored zone_data"
+                    )
+                    if not self.dry_run:
+                        self.save_queue.put(
+                            {
+                                "domain": record.domain,
+                                "hostname": record.hostname or "",
+                                "username": record.username or "",
+                                "zone_file": record.zone_data,
+                                "failed_backends": missing,
+                                "retry_count": 0,
+                                "source": "reconciler_heal",
+                            }
+                        )
+                        healed += 1
+
+            if healed:
+                logger.info(
+                    f"[reconciler] Healing pass complete — "
+                    f"{healed} zone(s) re-queued for backend recovery"
+                )
+            else:
+                logger.debug(
+                    "[reconciler] Healing pass complete — all backends consistent"
+                )
+        finally:
+            session.close()
