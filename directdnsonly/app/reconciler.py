@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import threading
 from loguru import logger
+from sqlalchemy import select
 
 from directdnsonly.app.da import DirectAdminClient
 from directdnsonly.app.db import connect
@@ -60,7 +61,9 @@ class ReconciliationWorker:
         server_names = [s.get("hostname", "?") for s in self.servers]
         mode = "DRY-RUN" if self.dry_run else "LIVE"
         delay_str = (
-            f", initial_delay: {self._initial_delay // 60}m" if self._initial_delay else ""
+            f", initial_delay: {self._initial_delay // 60}m"
+            if self._initial_delay
+            else ""
         )
         logger.info(
             f"Reconciliation poller started [{mode}] — "
@@ -137,7 +140,7 @@ class ReconciliationWorker:
         # Compare local DB against what DA reported; update masters and queue deletes
         session = connect()
         try:
-            all_local_domains = session.query(Domain).all()
+            all_local_domains = session.execute(select(Domain)).scalars().all()
             migrated = 0
             backfilled = 0
             known_servers = {s.get("hostname") for s in self.servers}
@@ -221,13 +224,13 @@ class ReconciliationWorker:
 
         session = connect()
         try:
-            domains = (
-                session.query(Domain)
-                .filter(Domain.zone_data.isnot(None))
-                .all()
-            )
+            domains = session.execute(
+                    select(Domain).where(Domain.zone_data.isnot(None))
+                ).scalars().all()
             if not domains:
-                logger.debug("[reconciler] Healing pass: no zone_data stored yet — skipping")
+                logger.debug(
+                    "[reconciler] Healing pass: no zone_data stored yet — skipping"
+                )
                 return
 
             healed = 0

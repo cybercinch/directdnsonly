@@ -1,4 +1,5 @@
 from loguru import logger
+from sqlalchemy import select
 
 from directdnsonly.app.db.models import *
 from directdnsonly.app.db import connect
@@ -8,12 +9,11 @@ def check_zone_exists(zone_name):
     # Check if zone is present in the index
     session = connect()
     logger.debug("Checking if {} is present in the DB".format(zone_name))
-    domain_exists = bool(session.query(Domain.id).filter_by(domain=zone_name).first())
+    domain_exists = bool(
+        session.execute(select(Domain.id).filter_by(domain=zone_name)).first()
+    )
     logger.debug("Returned from query: {}".format(domain_exists))
-    if domain_exists:
-        return True
-    else:
-        return False
+    return domain_exists
 
 
 def put_zone_index(zone_name, host_name, user_name):
@@ -28,7 +28,9 @@ def put_zone_index(zone_name, host_name, user_name):
 def get_domain_record(zone_name):
     """Return the Domain record for zone_name, or None if not found"""
     session = connect()
-    return session.query(Domain).filter_by(domain=zone_name).first()
+    return session.execute(
+        select(Domain).filter_by(domain=zone_name)
+    ).scalar_one_or_none()
 
 
 def check_parent_domain_owner(zone_name):
@@ -38,7 +40,9 @@ def check_parent_domain_owner(zone_name):
         return False
     session = connect()
     logger.debug("Checking if parent domain {} exists in DB".format(parent_domain))
-    return bool(session.query(Domain.id).filter_by(domain=parent_domain).first())
+    return bool(
+        session.execute(select(Domain.id).filter_by(domain=parent_domain)).first()
+    )
 
 
 def get_parent_domain_record(zone_name):
@@ -47,4 +51,6 @@ def get_parent_domain_record(zone_name):
     if not parent_domain:
         return None
     session = connect()
-    return session.query(Domain).filter_by(domain=parent_domain).first()
+    return session.execute(
+        select(Domain).filter_by(domain=parent_domain)
+    ).scalar_one_or_none()

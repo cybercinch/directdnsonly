@@ -11,12 +11,12 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "vyper-config (>=1.2.1,<2.0.0)",
     "loguru (>=0.7.3,<0.8.0)",
-    "persist-queue (>=1.0.0,<2.0.0)",
+    "persist-queue (>=1.1.0,<2.0.0)",
     "cherrypy (>=18.10.0,<19.0.0)",
-    "sqlalchemy (<2.0.0)",
-    "pymysql (>=1.1.1,<2.0.0)",
-    "dnspython (>=2.7.0,<3.0.0)",
-    "pyyaml (>=6.0.2,<7.0.0)",
+    "sqlalchemy (>=2.0.0,<3.0.0)",
+    "pymysql (>=1.1.2,<2.0.0)",
+    "dnspython (>=2.8.0,<3.0.0)",
+    "pyyaml (>=6.0.3,<7.0.0)",
     "requests (>=2.32.0,<3.0.0)",
 ]
 
@@ -24,11 +24,11 @@ dependencies = [
 package-mode = true
 
 [tool.poetry.group.dev.dependencies]
-black = "^25.1.0"
+black = "^26.1.0"
 pyinstaller = "^6.13.0"
-pytest = "^8.3.5"
-pytest-cov = "^6.1.1"
-pytest-mock = "^3.14.0"
+pytest = "^9.0.2"
+pytest-cov = "^7.0.0"
+pytest-mock = "^3.15.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

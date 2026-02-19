@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 from persistqueue import Queue
 from persistqueue.exceptions import Empty
+from sqlalchemy import select
 
 from app.utils import check_zone_exists, put_zone_index
 from app.utils.zone_parser import count_zone_records
@@ -89,9 +90,7 @@ class WorkerManager:
                 )
 
                 if not is_retry and not check_zone_exists(domain):
-                    put_zone_index(
-                        domain, item.get("hostname"), item.get("username")
-                    )
+                    put_zone_index(domain, item.get("hostname"), item.get("username"))
 
                 if not all(k in item for k in ["domain", "zone_file"]):
                     logger.error(f"Invalid queue item: {item}")
@@ -101,7 +100,9 @@ class WorkerManager:
 
                 backends = self.backend_registry.get_available_backends()
                 if target_backends:
-                    backends = {k: v for k, v in backends.items() if k in target_backends}
+                    backends = {
+                        k: v for k, v in backends.items() if k in target_backends
+                    }
                 if not backends:
                     logger.warning("No target backends available for this item!")
                     self.save_queue.task_done()
@@ -113,7 +114,9 @@ class WorkerManager:
                 else:
                     failed = set()
                     for backend_name, backend in backends.items():
-                        if not self._process_single_backend(backend_name, backend, item, session):
+                        if not self._process_single_backend(
+                            backend_name, backend, item, session
+                        ):
                             failed.add(backend_name)
 
                 if failed:
@@ -154,7 +157,7 @@ class WorkerManager:
                 logger.debug(f"Successfully updated {item['domain']} in {backend_name}")
                 if backend.get_name() == "bind":
                     backend.update_named_conf(
-                        [d.domain for d in session.query(Domain).all()]
+                        [d.domain for d in session.execute(select(Domain)).scalars().all()]
                     )
                     backend.reload_zone()
                 else:
@@ -227,7 +230,9 @@ class WorkerManager:
     def _store_zone_data(self, session, domain: str, zone_file: str):
         """Persist the latest zone file content to the domain DB record."""
         try:
-            record = session.query(Domain).filter_by(domain=domain).first()
+            record = session.execute(
+                select(Domain).filter_by(domain=domain)
+            ).scalar_one_or_none()
             if record:
                 record.zone_data = zone_file
                 record.zone_updated_at = datetime.datetime.utcnow()
@@ -294,7 +299,9 @@ class WorkerManager:
 
                 logger.debug(f"Processing delete for {domain}")
 
-                record = session.query(Domain).filter_by(domain=domain).first()
+                record = session.execute(
+                    select(Domain).filter_by(domain=domain)
+                ).scalar_one_or_none()
                 if not record:
                     logger.warning(f"Domain {domain} not found in DB — skipping delete")
                     self.delete_queue.task_done()
@@ -314,7 +321,9 @@ class WorkerManager:
                     )
 
                 backends = self.backend_registry.get_available_backends()
-                remaining_domains = [d.domain for d in session.query(Domain).all()]
+                remaining_domains = [
+                    d.domain for d in session.execute(select(Domain)).scalars().all()
+                ]
                 delete_success = True
 
                 if not backends:
@@ -327,7 +336,10 @@ class WorkerManager:
                         futures = {
                             executor.submit(
                                 self._delete_single_backend,
-                                backend_name, backend, domain, remaining_domains
+                                backend_name,
+                                backend,
+                                domain,
+                                remaining_domains,
                             ): backend_name
                             for backend_name, backend in backends.items()
                         }
@@ -462,9 +474,7 @@ class WorkerManager:
         self._save_thread.start()
         self._delete_thread.start()
         self._retry_thread.start()
-        logger.info(
-            f"Started worker threads: save, delete, retry_drain"
-        )
+        logger.info(f"Started worker threads: save, delete, retry_drain")
 
         self._reconciler = ReconciliationWorker(
             delete_queue=self.delete_queue,
@@ -494,7 +504,8 @@ class WorkerManager:
             "delete_queue_size": self.delete_queue.qsize(),
             "retry_queue_size": self.retry_queue.qsize(),
             "save_worker_alive": self._save_thread and self._save_thread.is_alive(),
-            "delete_worker_alive": self._delete_thread and self._delete_thread.is_alive(),
+            "delete_worker_alive": self._delete_thread
+            and self._delete_thread.is_alive(),
             "retry_worker_alive": self._retry_thread and self._retry_thread.is_alive(),
             "reconciler_alive": (
                 self._reconciler.is_alive if self._reconciler else False

@@ -22,6 +22,7 @@ import datetime
 import threading
 from loguru import logger
 import requests
+from sqlalchemy import select
 
 from directdnsonly.app.db import connect
 from directdnsonly.app.db.models import Domain
@@ -44,9 +45,7 @@ class PeerSyncWorker:
             logger.info("Peer sync disabled — skipping")
             return
         if not self.peers:
-            logger.warning(
-                "Peer sync enabled but no peers configured"
-            )
+            logger.warning("Peer sync enabled but no peers configured")
             return
 
         self._stop_event.clear()
@@ -82,9 +81,7 @@ class PeerSyncWorker:
             self._sync_all()
 
     def _sync_all(self):
-        logger.debug(
-            f"[peer_sync] Starting sync pass across {len(self.peers)} peer(s)"
-        )
+        logger.debug(f"[peer_sync] Starting sync pass across {len(self.peers)} peer(s)")
         for peer in self.peers:
             url = peer.get("url")
             if not url:
@@ -93,9 +90,7 @@ class PeerSyncWorker:
             try:
                 self._sync_from_peer(peer)
             except Exception as exc:
-                logger.warning(
-                    f"[peer_sync] Skipping unreachable peer {url}: {exc}"
-                )
+                logger.warning(f"[peer_sync] Skipping unreachable peer {url}: {exc}")
 
     def _sync_from_peer(self, peer: dict):
         url = peer.get("url", "").rstrip("/")
@@ -104,9 +99,7 @@ class PeerSyncWorker:
         auth = (username, password) if username else None
 
         # Fetch the peer's zone list
-        resp = requests.get(
-            f"{url}/internal/zones", auth=auth, timeout=10
-        )
+        resp = requests.get(f"{url}/internal/zones", auth=auth, timeout=10)
         if resp.status_code != 200:
             logger.warning(
                 f"[peer_sync] {url}: /internal/zones returned {resp.status_code}"
@@ -133,7 +126,9 @@ class PeerSyncWorker:
                     else None
                 )
 
-                local = session.query(Domain).filter_by(domain=domain).first()
+                local = session.execute(
+                    select(Domain).filter_by(domain=domain)
+                ).scalar_one_or_none()
 
                 needs_sync = (
                     local is None
@@ -183,16 +178,12 @@ class PeerSyncWorker:
                 else:
                     local.zone_data = zone_data
                     local.zone_updated_at = peer_ts
-                    logger.debug(
-                        f"[peer_sync] {url}: updated zone_data for {domain}"
-                    )
+                    logger.debug(f"[peer_sync] {url}: updated zone_data for {domain}")
                 synced += 1
 
             if synced:
                 session.commit()
-                logger.info(
-                    f"[peer_sync] Synced {synced} zone(s) from {url}"
-                )
+                logger.info(f"[peer_sync] Synced {synced} zone(s) from {url}")
             else:
                 logger.debug(f"[peer_sync] {url}: already up to date")
         finally:
