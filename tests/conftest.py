@@ -37,4 +37,5 @@ def patch_connect(db_session, monkeypatch):
     _factory = lambda: db_session  # noqa: E731
     monkeypatch.setattr("directdnsonly.app.utils.connect", _factory)
     monkeypatch.setattr("directdnsonly.app.reconciler.connect", _factory)
+    monkeypatch.setattr("directdnsonly.app.peer_sync.connect", _factory)
     return db_session

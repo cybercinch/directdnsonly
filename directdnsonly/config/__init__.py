@@ -62,6 +62,10 @@ def load_config() -> Vyper:
     v.set_default("reconciliation.interval_minutes", 60)
     v.set_default("reconciliation.verify_ssl", True)
 
+    # Peer sync defaults
+    v.set_default("peer_sync.enabled", False)
+    v.set_default("peer_sync.interval_minutes", 15)
+
     # Read configuration
     try:
         if not v.read_in_config():

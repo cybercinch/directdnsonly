@@ -3,6 +3,7 @@ import cherrypy
 from app.backends import BackendRegistry
 from app.api.admin import DNSAdminAPI
 from app.api.health import HealthAPI
+from app.api.internal import InternalAPI
 from app import configure_logging
 from worker import WorkerManager
 from directdnsonly.config import config
@@ -38,10 +39,12 @@ def main():
 
         # Setup worker manager
         reconciliation_config = config.get("reconciliation") or {}
+        peer_sync_config = config.get("peer_sync") or {}
         worker_manager = WorkerManager(
             queue_path=config.get("queue_location"),
             backend_registry=registry,
             reconciliation_config=reconciliation_config,
+            peer_sync_config=peer_sync_config,
         )
         worker_manager.start()
         logger.info(
@@ -95,6 +98,7 @@ def main():
             backend_registry=registry,
         )
         root.health = HealthAPI(registry)
+        root.internal = InternalAPI()
 
         # Add queue status endpoint
         root.queue_status = lambda: worker_manager.queue_status()

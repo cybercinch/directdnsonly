@@ -12,6 +12,7 @@ from app.utils.zone_parser import count_zone_records
 from directdnsonly.app.db.models import Domain
 from directdnsonly.app.db import connect
 from directdnsonly.app.reconciler import ReconciliationWorker
+from directdnsonly.app.peer_sync import PeerSyncWorker
 
 # ---------------------------------------------------------------------------
 # Retry configuration
@@ -25,7 +26,11 @@ RETRY_DRAIN_INTERVAL = 30  # how often the retry drain thread wakes
 
 class WorkerManager:
     def __init__(
-        self, queue_path: str, backend_registry, reconciliation_config: dict = None
+        self,
+        queue_path: str,
+        backend_registry,
+        reconciliation_config: dict = None,
+        peer_sync_config: dict = None,
     ):
         self.queue_path = queue_path
         self.backend_registry = backend_registry
@@ -34,7 +39,9 @@ class WorkerManager:
         self._delete_thread = None
         self._retry_thread = None
         self._reconciler = None
+        self._peer_syncer = None
         self._reconciliation_config = reconciliation_config or {}
+        self._peer_sync_config = peer_sync_config or {}
 
         try:
             os.makedirs(queue_path, exist_ok=True)
@@ -467,10 +474,15 @@ class WorkerManager:
         )
         self._reconciler.start()
 
+        self._peer_syncer = PeerSyncWorker(self._peer_sync_config)
+        self._peer_syncer.start()
+
     def stop(self):
         self._running = False
         if self._reconciler:
             self._reconciler.stop()
+        if self._peer_syncer:
+            self._peer_syncer.stop()
         for thread in (self._save_thread, self._delete_thread, self._retry_thread):
             if thread:
                 thread.join(timeout=5)
@@ -486,5 +498,8 @@ class WorkerManager:
             "retry_worker_alive": self._retry_thread and self._retry_thread.is_alive(),
             "reconciler_alive": (
                 self._reconciler.is_alive if self._reconciler else False
+            ),
+            "peer_syncer_alive": (
+                self._peer_syncer.is_alive if self._peer_syncer else False
             ),
         }

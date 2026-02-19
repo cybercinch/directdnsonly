@@ -30,6 +30,18 @@ app:
 #      password: secret
 #      ssl: true
 
+# Peer sync — exchange zone_data between directdnsonly instances
+# Enables eventual consistency without a shared datastore.
+# If a peer is offline, the sync is silently skipped and retried next interval.
+# Use the same credentials as the peer's app.auth_username / auth_password.
+#peer_sync:
+#  enabled: true
+#  interval_minutes: 15
+#  peers:
+#    - url: http://ddo-2:2222   # URL of the peer directdnsonly instance
+#      username: directdnsonly
+#      password: changeme
+
 dns:
   default_backend: bind
   backends:
