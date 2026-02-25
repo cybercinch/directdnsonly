@@ -161,6 +161,136 @@ class DirectAdminClient:
             logger.error(f"[da:{self.hostname}] GET {command} failed: {exc}")
             return None
 
+    def post(
+        self, command: str, data: Optional[dict] = None
+    ) -> Optional[requests.Response]:
+        """Authenticated POST to any DA CMD_* endpoint."""
+        url = f"{self.scheme}://{self.hostname}:{self.port}/{command}"
+        kwargs: dict = dict(
+            data=data or {},
+            timeout=30,
+            verify=self.verify_ssl,
+            allow_redirects=False,
+        )
+        if self._cookies:
+            kwargs["cookies"] = self._cookies
+        else:
+            kwargs["auth"] = (self.username, self.password)
+
+        try:
+            return requests.post(url, **kwargs)
+        except Exception as exc:
+            logger.error(f"[da:{self.hostname}] POST {command} failed: {exc}")
+            return None
+
+    def get_extra_dns_servers(self) -> dict:
+        """Return the Extra DNS server map from CMD_MULTI_SERVER (GET).
+
+        Returns a dict keyed by server hostname/IP, each value being the
+        per-server settings dict (dns, domain_check, port, user, ssl, …).
+        Returns ``{}`` on any error.
+        """
+        resp = self.get("CMD_MULTI_SERVER", params={"json": "yes"})
+        if resp is None or resp.status_code != 200:
+            logger.error(f"[da:{self.hostname}] CMD_MULTI_SERVER GET failed")
+            return {}
+        try:
+            return resp.json().get("servers", {})
+        except Exception as exc:
+            logger.error(f"[da:{self.hostname}] CMD_MULTI_SERVER parse error: {exc}")
+            return {}
+
+    def add_extra_dns_server(
+        self, ip: str, port: int, user: str, passwd: str, ssl: bool = False
+    ) -> bool:
+        """Register a new Extra DNS server via CMD_MULTI_SERVER action=add.
+
+        Returns ``True`` if DA reports success, ``False`` otherwise.
+        """
+        resp = self.post(
+            "CMD_MULTI_SERVER",
+            data={
+                "action": "add",
+                "json": "yes",
+                "ip": ip,
+                "port": str(port),
+                "user": user,
+                "passwd": passwd,
+                "ssl": "yes" if ssl else "no",
+            },
+        )
+        if resp is None or resp.status_code != 200:
+            logger.error(f"[da:{self.hostname}] CMD_MULTI_SERVER add failed for {ip}")
+            return False
+        try:
+            result = resp.json()
+            if result.get("success"):
+                logger.info(f"[da:{self.hostname}] Added Extra DNS server {ip}")
+                return True
+            logger.error(
+                f"[da:{self.hostname}] CMD_MULTI_SERVER add error: {result.get('result', result)}"
+            )
+            return False
+        except Exception as exc:
+            logger.error(f"[da:{self.hostname}] CMD_MULTI_SERVER add parse error: {exc}")
+            return False
+
+    def ensure_extra_dns_server(
+        self, ip: str, port: int, user: str, passwd: str, ssl: bool = False
+    ) -> bool:
+        """Add (if absent) and configure a directdnsonly Extra DNS server.
+
+        Ensures the server is registered with ``dns=yes`` and
+        ``domain_check=yes`` so DirectAdmin pushes zone updates to it.
+        Returns ``True`` if fully configured, ``False`` on any failure.
+        """
+        servers = self.get_extra_dns_servers()
+        if ip not in servers:
+            if not self.add_extra_dns_server(ip, port, user, passwd, ssl):
+                return False
+
+        ssl_str = "yes" if ssl else "no"
+        resp = self.post(
+            "CMD_MULTI_SERVER",
+            data={
+                "action": "multiple",
+                "save": "yes",
+                "json": "yes",
+                "passwd": "",
+                "select0": ip,
+                f"port-{ip}": str(port),
+                f"user-{ip}": user,
+                f"ssl-{ip}": ssl_str,
+                f"dns-{ip}": "yes",
+                f"domain_check-{ip}": "yes",
+                f"user_check-{ip}": "no",
+                f"email-{ip}": "no",
+                f"show_all_users-{ip}": "no",
+            },
+        )
+        if resp is None or resp.status_code != 200:
+            logger.error(
+                f"[da:{self.hostname}] CMD_MULTI_SERVER save failed for {ip}"
+            )
+            return False
+        try:
+            result = resp.json()
+            if result.get("success"):
+                logger.info(
+                    f"[da:{self.hostname}] Extra DNS server {ip} configured "
+                    f"(dns=yes domain_check=yes)"
+                )
+                return True
+            logger.error(
+                f"[da:{self.hostname}] CMD_MULTI_SERVER save error: {result.get('result', result)}"
+            )
+            return False
+        except Exception as exc:
+            logger.error(
+                f"[da:{self.hostname}] CMD_MULTI_SERVER save parse error: {exc}"
+            )
+            return False
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

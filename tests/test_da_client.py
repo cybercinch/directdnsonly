@@ -200,3 +200,171 @@ def test_login_returns_false_on_exception():
         result = client._login()
 
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# get_extra_dns_servers
+# ---------------------------------------------------------------------------
+
+
+def _multi_server_get_resp(servers=None):
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.is_redirect = False
+    mock.headers = {"Content-Type": "application/json"}
+    mock.json.return_value = {"CLUSTER_ON": "yes", "servers": servers or {}}
+    mock.raise_for_status = MagicMock()
+    return mock
+
+
+def test_get_extra_dns_servers_returns_servers_dict():
+    servers = {
+        "1.2.3.4": {"dns": "yes", "domain_check": "yes", "port": "2222", "ssl": "no"}
+    }
+    with patch("requests.get", return_value=_multi_server_get_resp(servers)):
+        result = _client().get_extra_dns_servers()
+
+    assert "1.2.3.4" in result
+    assert result["1.2.3.4"]["dns"] == "yes"
+
+
+def test_get_extra_dns_servers_returns_empty_on_http_error():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    with patch("requests.get", return_value=mock_resp):
+        result = _client().get_extra_dns_servers()
+
+    assert result == {}
+
+
+def test_get_extra_dns_servers_returns_empty_on_connection_error():
+    with patch(
+        "requests.get", side_effect=requests.exceptions.ConnectionError("refused")
+    ):
+        result = _client().get_extra_dns_servers()
+
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# add_extra_dns_server
+# ---------------------------------------------------------------------------
+
+
+def test_add_extra_dns_server_returns_true_on_success():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"result": "", "success": "Connection Added"}
+
+    with patch("requests.post", return_value=mock_resp):
+        result = _client().add_extra_dns_server("1.2.3.4", 2222, "ddnsonly", "s3cr3t")
+
+    assert result is True
+
+
+def test_add_extra_dns_server_returns_false_on_da_error():
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"result": "Server already exists", "success": ""}
+
+    with patch("requests.post", return_value=mock_resp):
+        result = _client().add_extra_dns_server("1.2.3.4", 2222, "ddnsonly", "s3cr3t")
+
+    assert result is False
+
+
+def test_add_extra_dns_server_returns_false_on_connection_error():
+    with patch(
+        "requests.post", side_effect=requests.exceptions.ConnectionError("refused")
+    ):
+        result = _client().add_extra_dns_server("1.2.3.4", 2222, "ddnsonly", "s3cr3t")
+
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# ensure_extra_dns_server
+# ---------------------------------------------------------------------------
+
+
+def _add_success_resp():
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {"result": "", "success": "Connection Added"}
+    return mock
+
+
+def _save_success_resp():
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {"result": "", "success": "Connections Saved"}
+    return mock
+
+
+def test_ensure_extra_dns_server_adds_and_configures_new_server():
+    """Server not yet registered — adds it, then saves dns+domain_check settings."""
+    with (
+        patch("requests.get", return_value=_multi_server_get_resp(servers={})),
+        patch(
+            "requests.post",
+            side_effect=[_add_success_resp(), _save_success_resp()],
+        ),
+    ):
+        result = _client().ensure_extra_dns_server(
+            "1.2.3.4", 2222, "ddnsonly", "s3cr3t"
+        )
+
+    assert result is True
+
+
+def test_ensure_extra_dns_server_skips_add_when_already_present():
+    """Server already registered — no add call, only saves settings."""
+    existing = {
+        "1.2.3.4": {"dns": "no", "domain_check": "no", "port": "2222", "ssl": "no"}
+    }
+    with (
+        patch("requests.get", return_value=_multi_server_get_resp(servers=existing)),
+        patch("requests.post", return_value=_save_success_resp()) as mock_post,
+    ):
+        result = _client().ensure_extra_dns_server(
+            "1.2.3.4", 2222, "ddnsonly", "s3cr3t"
+        )
+
+    assert result is True
+    assert mock_post.call_count == 1  # save only, no add
+
+
+def test_ensure_extra_dns_server_returns_false_when_add_fails():
+    fail_resp = MagicMock()
+    fail_resp.status_code = 200
+    fail_resp.json.return_value = {"result": "error", "success": ""}
+
+    with (
+        patch("requests.get", return_value=_multi_server_get_resp(servers={})),
+        patch("requests.post", return_value=fail_resp),
+    ):
+        result = _client().ensure_extra_dns_server(
+            "1.2.3.4", 2222, "ddnsonly", "s3cr3t"
+        )
+
+    assert result is False
+
+
+def test_ensure_extra_dns_server_returns_false_when_save_fails():
+    """Add succeeds but the subsequent settings save fails."""
+    fail_save = MagicMock()
+    fail_save.status_code = 200
+    fail_save.json.return_value = {"result": "error", "success": ""}
+
+    with (
+        patch("requests.get", return_value=_multi_server_get_resp(servers={})),
+        patch(
+            "requests.post",
+            side_effect=[_add_success_resp(), fail_save],
+        ),
+    ):
+        result = _client().ensure_extra_dns_server(
+            "1.2.3.4", 2222, "ddnsonly", "s3cr3t"
+        )
+
+    assert result is False
