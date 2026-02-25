@@ -154,10 +154,12 @@ dns:
 peer_sync:
   enabled: true
   interval_minutes: 15
+  auth_username: peersync          # what peers must send to call /internal on this node
+  auth_password: peer-secret       # keep distinct from app.auth_password
   peers:
     - url: http://directdnsonly-mlb:2222
-      username: directdnsonly
-      password: your-secret
+      username: peersync           # must match mlb's peer_sync.auth_username
+      password: peer-secret        # must match mlb's peer_sync.auth_password
 
 reconciliation:
   enabled: true
@@ -438,18 +440,26 @@ DirectDNSOnly uses [Vyper](https://github.com/sn3d/vyper-py) for configuration. 
 
 #### Peer sync
 
-| Config key / Environment variable | Default | Description |
-|---|---|---|
-| `peer_sync.enabled` / `DADNS_PEER_SYNC_ENABLED` | `false` | Enable background peer-to-peer zone sync |
-| `peer_sync.interval_minutes` / `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | How often each peer is polled |
+Peer sync uses **separate credentials from the main DA-facing API** — keep them distinct so a compromised peer token cannot push zones to DirectAdmin.
 
-For a **single peer** (the typical two-node Topology C setup) the peer can be configured entirely via env vars — no config file required:
+**Server-side** — what this node requires when peers call its `/internal` endpoint:
+
+| Config key | Environment variable | Default | Description |
+|---|---|---|---|
+| `peer_sync.enabled` | `DADNS_PEER_SYNC_ENABLED` | `false` | Enable background peer-to-peer zone sync |
+| `peer_sync.interval_minutes` | `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | How often each peer is polled |
+| `peer_sync.auth_username` | `DADNS_PEER_SYNC_AUTH_USERNAME` | `peersync` | Username **this node** accepts on incoming `/internal` calls from peers |
+| `peer_sync.auth_password` | `DADNS_PEER_SYNC_AUTH_PASSWORD` | `changeme` | Password **this node** accepts from peers — **always override in production** |
+
+> **Auth realms:** `app.auth_username`/`app.auth_password` protect DA-facing zone push routes. `peer_sync.auth_username`/`peer_sync.auth_password` protect `/internal` (zone exchange between nodes). The two realms are enforced separately — a peer credential cannot be used to push zones and vice versa.
+
+**Client-side** — what this node sends when calling each peer's `/internal` endpoint. For a **single peer** these can be set via env vars with no config file:
 
 | Environment variable | Default | Description |
 |---|---|---|
 | `DADNS_PEER_SYNC_PEER_URL` | _(unset)_ | URL of the single peer (e.g. `http://ddo-2:2222`). When set, this peer is automatically appended to the peers list. |
-| `DADNS_PEER_SYNC_PEER_USERNAME` | `directdnsonly` | Basic auth username for the peer |
-| `DADNS_PEER_SYNC_PEER_PASSWORD` | _(empty)_ | Basic auth password for the peer |
+| `DADNS_PEER_SYNC_PEER_USERNAME` | `peersync` | Username sent to the peer's `/internal` — must match the peer's `peer_sync.auth_username` |
+| `DADNS_PEER_SYNC_PEER_PASSWORD` | _(empty)_ | Password sent to the peer — must match the peer's `peer_sync.auth_password` |
 
 > For **multiple peers**, use a config file with the `peer_sync.peers` list. A peer defined via env var is deduped — if the same URL already appears in the config file it will not be added twice.
 
@@ -481,13 +491,15 @@ services:
       - "2222:2222"
       - "53:53/udp"
     environment:
-      DADNS_APP_AUTH_PASSWORD: my-strong-secret
+      DADNS_APP_AUTH_PASSWORD: my-strong-secret        # DA-facing auth
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
       DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_AUTH_USERNAME: peersync          # what peers must send to THIS node
+      DADNS_PEER_SYNC_AUTH_PASSWORD: peer-secret       # distinct from DA password
       DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-mlb:2222
-      DADNS_PEER_SYNC_PEER_USERNAME: directdnsonly
-      DADNS_PEER_SYNC_PEER_PASSWORD: my-strong-secret
+      DADNS_PEER_SYNC_PEER_USERNAME: peersync          # must match mlb's AUTH_USERNAME
+      DADNS_PEER_SYNC_PEER_PASSWORD: peer-secret       # must match mlb's AUTH_PASSWORD
     volumes:
       - syd-data:/app/data
 
@@ -497,13 +509,15 @@ services:
       - "2223:2222"
       - "54:53/udp"
     environment:
-      DADNS_APP_AUTH_PASSWORD: my-strong-secret
+      DADNS_APP_AUTH_PASSWORD: my-strong-secret        # DA-facing auth
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
       DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_AUTH_USERNAME: peersync          # what peers must send to THIS node
+      DADNS_PEER_SYNC_AUTH_PASSWORD: peer-secret       # distinct from DA password
       DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-syd:2222
-      DADNS_PEER_SYNC_PEER_USERNAME: directdnsonly
-      DADNS_PEER_SYNC_PEER_PASSWORD: my-strong-secret
+      DADNS_PEER_SYNC_PEER_USERNAME: peersync          # must match syd's AUTH_USERNAME
+      DADNS_PEER_SYNC_PEER_PASSWORD: peer-secret       # must match syd's AUTH_PASSWORD
     volumes:
       - mlb-data:/app/data
 
