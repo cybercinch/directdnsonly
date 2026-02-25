@@ -41,7 +41,7 @@ DirectAdmin Multi-Server
 | Zone deleted from DA while instance was down | The reconciliation poller detects the orphan on the next pass and queues a delete, keeping the BIND instance clean without manual intervention. |
 | Two instances diverge | No automatic cross-instance sync. Drift persists until DA re-pushes the affected zone (i.e. the next time that domain is touched in DA). |
 
-> **DNS consistency note:** DirectAdmin pushes to each Extra DNS server sequentially, not atomically. If one instance is offline when a zone is changed, that instance will serve stale data until the next DA push for that zone. For workloads where split-brain DNS is unacceptable, use Topology B (single write path → multiple MySQL backends) instead.
+> **DNS consistency note:** DirectAdmin pushes to each Extra DNS server sequentially, not atomically. If one instance is offline when a zone is changed, that instance will serve stale data until the next DA push for that zone. For workloads where split-brain DNS is unacceptable, **directdnsonly Pro** (Topology B — MySQL-backed multi-DC) provides a single-write-path architecture that eliminates this risk.
 
 #### `config/app.yml` — instance 1
 
@@ -78,102 +78,42 @@ Register both containers as separate Extra DNS entries in DA → DNS Administrat
 
 ---
 
-### Topology B — Single Instance, Multiple CoreDNS MySQL Backends (Multi-DC)
+### Topology B — MySQL-backed Multi-DC _(directdnsonly Pro)_
 
-One DirectDNSOnly instance receives zone pushes from DirectAdmin and fans out to two (or more) CoreDNS MySQL databases in parallel. CoreDNS servers in each data centre read from their local database. The directdnsonly instance is the sole write path — it does **not** serve DNS itself.
+> **This topology is available in directdnsonly Pro.** Community edition supports NSD and BIND9 backends. Pro adds MySQL-backed fan-out (CoreDNS MySQL), enabling a single directdnsonly instance to write to N CoreDNS databases in parallel across multiple data centres — with zero daemon reloads and CoreDNS JSON cache fallback for read resilience during database outages.
 
-```
-DirectAdmin
-        │
-        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly  (single container)
-                                                │
-                                     Persistent Queue (survives restarts)
-                                     zone_data stored to SQLite after each write
-                                                │
-                                     ThreadPoolExecutor (one thread per backend)
-                                         │               │
-                                         ▼               ▼
-                               coredns_mysql_dc1   coredns_mysql_dc2
-                               (MySQL 10.0.0.80)   (MySQL 10.0.1.29)
-                                         │               │
-                                    [success]       [failure → retry queue]
-                                         │               │
-                                         ▼       30s/2m/5m/15m/30m backoff
-                                  CoreDNS (DC1)        retry → coredns_mysql_dc2
-                               serves :53 from DB
-                                                │
-                             Reconciliation poller (every N minutes)
-                             ├─ orphan detection (zones removed from DA)
-                             └─ healing pass: zone_exists() per backend
-                                → re-queue any backend missing a zone
-                                  using stored zone_data (no DA re-push needed)
-```
+**What Pro's Topology B gives you:**
 
-Both MySQL backends are written **concurrently** within the same zone update. A slow or unreachable secondary does not block the primary write. Failed backends enter the retry queue automatically. The reconciliation healing pass provides a further safety net for prolonged outages.
+- One write path → all backends updated concurrently (ThreadPoolExecutor)
+- Failed backends enter the retry queue automatically (exp. backoff)
+- `zone_data` stored in the internal datastore — reconciliation healing re-pushes missing zones without any DA intervention
+- CoreDNS reads from its local MySQL database at query time — no reload, no disruption during backend maintenance
+- Adding a data centre is a single stanza in the config — no code changes
 
-#### Failure behaviour
-
-| Scenario | What happens |
-|---|---|
-| One MySQL backend unreachable | Other backend(s) succeed immediately. Failed backend queued for retry with exponential backoff (30 s → 2 m → 5 m → 15 m → 30 m, up to 5 attempts). CoreDNS continues serving from its local JSON cache throughout. |
-| MySQL backend down for hours | Retry queue exhausts. CoreDNS serves from cache the entire time — zero query downtime. On recovery, the reconciliation healing pass detects the backend is missing zones and re-pushes all of them using stored `zone_data` — no DA intervention required. |
-| directdnsonly container restarts | Persistent queue survives. In-flight zone updates replay on startup. |
-| directdnsonly container down during DA push | DA cannot deliver. Persistent queue on disk is intact; when the container comes back, it resumes processing any previously queued items. New pushes during downtime are lost at the DA level (DA does not retry). |
-| Zone deleted from DA | Reconciliation poller detects orphan and queues delete across all backends. |
-
-#### `config/app.yml`
-
-```yaml
-app:
-  auth_username: directdnsonly
-  auth_password: your-secret
-
-dns:
-  default_backend: coredns_mysql_dc1
-  backends:
-    coredns_mysql_dc1:
-      type: coredns_mysql
-      enabled: true
-      host: 10.0.0.80
-      port: 3306
-      database: coredns
-      username: coredns
-      password: your-db-password
-
-    coredns_mysql_dc2:
-      type: coredns_mysql
-      enabled: true
-      host: 10.0.1.29
-      port: 3306
-      database: coredns
-      username: coredns
-      password: your-db-password
-```
-
-Adding a third data centre is a single stanza in the config — no code changes required.
+Watch the repository or contact us for Pro release announcements.
 
 ---
 
 ### Topology C — Multi-Instance with Peer Sync (Most Robust)
 
-Multiple independent DirectDNSOnly containers, each with a single local DNS backend (NSD or CoreDNS MySQL), registered as separate Extra DNS servers in DirectAdmin Multi-Server. Peer sync provides eventual consistency — if one instance misses a DA push while it is offline, it recovers the missing zone data from a peer on the next sync interval.
+Multiple independent DirectDNSOnly containers, each with a single local DNS backend (NSD in community, or CoreDNS MySQL with Pro), registered as separate Extra DNS servers in DirectAdmin Multi-Server. Peer sync provides eventual consistency — if one instance misses a DA push while it is offline, it recovers the missing zone data from a peer on the next sync interval.
 
 ```
 DirectAdmin Multi-Server
         │
-        ├─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-syd  (NSD or CoreDNS MySQL)
+        ├─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-syd  (NSD)
         │                                     │
         │                            Persistent Queue + zone_data store
-        │                            ├─ writes zone file / MySQL
+        │                            ├─ writes zone file
         │                            ├─ reloads daemon
         │                            └─ retry on failure
         │                                     │
         │                             ◀──── peer sync ────▶
         │                                     │
-        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-mlb  (NSD or CoreDNS MySQL)
+        └─ POST /CMD_API_DNS_ADMIN ──▶  directdnsonly-mlb  (NSD)
                                                │
                                         Persistent Queue + zone_data store
-                                        ├─ writes zone file / MySQL
+                                        ├─ writes zone file
                                         ├─ reloads daemon
                                         └─ retry on failure
 ```
@@ -236,21 +176,21 @@ Register each container as a separate Extra DNS server entry in DA → DNS Admin
 
 ### Topology Comparison
 
-| | Topology A — Dual NSD/BIND | Topology B — CoreDNS MySQL | Topology C — Multi-Instance + Peer Sync |
+| | Topology A — Dual NSD/BIND | Topology B — MySQL-backed _(Pro)_ | Topology C — Multi-Instance + Peer Sync |
 |---|---|---|---|
-| **DNS server** | NSD or BIND9 (bundled) | CoreDNS (separate, reads MySQL) | NSD or CoreDNS MySQL (per instance) |
-| **Write path** | DA → each instance independently | DA → single instance → all backends | DA → each instance independently |
-| **Zone storage** | Zone files on container disk | MySQL database rows | Zone files or MySQL + SQLite zone_data store |
-| **DA registration** | Two Extra DNS server entries | One Extra DNS server entry | One entry per instance |
-| **Redundancy model** | Independent app+DNS units | One app, N database backends | Independent instances + peer sync |
-| **Transient backend failure** | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) |
-| **Prolonged backend outage** | No auto-recovery — waits for next DA push | Reconciler healing pass re-pushes all missing zones | Peer sync pulls missed zones from a healthy peer |
-| **Container down during push** | Zone missed entirely | Zone missed at DA level | Zone missed at DA level; recovered via peer sync |
-| **Cross-node consistency** | No sync between instances | All backends share same write path | Peer sync provides eventual consistency |
-| **Orphan detection** | Yes — reconciler | Yes — reconciler | Yes — reconciler (per instance) |
-| **External DB required** | No | Yes (MySQL per CoreDNS node) | No (NSD) or Yes (CoreDNS MySQL) |
-| **Horizontal scaling** | Add DA Extra DNS entries + containers | Add backend stanzas in config | Add DA Extra DNS entries + containers + peer list |
-| **Best for** | Simple HA, no external DB | Best overall — resilient writes (retry queue) + resilient reads (CoreDNS cache fallback), no daemon reloads, scales to thousands of zones | Most robust HA — resilient at every layer, survives extended outages without DA re-push |
+| **DNS server** | NSD or BIND9 (bundled) | CoreDNS (separate, reads MySQL) — _Pro_ | NSD or BIND9 (community) |
+| **Write path** | DA → each instance independently | DA → single instance → all backends — _Pro_ | DA → each instance independently |
+| **Zone storage** | Zone files on container disk | MySQL database rows — _Pro_ | Zone files + SQLite zone_data store |
+| **DA registration** | Two Extra DNS server entries | One Extra DNS server entry — _Pro_ | One entry per instance |
+| **Redundancy model** | Independent app+DNS units | One app, N database backends — _Pro_ | Independent instances + peer sync |
+| **Transient backend failure** | Retry queue (exp. backoff, 5 attempts) | Retry queue (exp. backoff, 5 attempts) — _Pro_ | Retry queue (exp. backoff, 5 attempts) |
+| **Prolonged backend outage** | No auto-recovery — waits for next DA push | Reconciler healing pass re-pushes all missing zones — _Pro_ | Peer sync pulls missed zones from a healthy peer |
+| **Container down during push** | Zone missed entirely | Zone missed at DA level — _Pro_ | Zone missed at DA level; recovered via peer sync |
+| **Cross-node consistency** | No sync between instances | All backends share same write path — _Pro_ | Peer sync provides eventual consistency |
+| **Orphan detection** | Yes — reconciler | Yes — reconciler — _Pro_ | Yes — reconciler (per instance) |
+| **External DB required** | No | Yes (MySQL per CoreDNS node) — _Pro_ | No |
+| **Horizontal scaling** | Add DA Extra DNS entries + containers | Add backend stanzas in config — _Pro_ | Add DA Extra DNS entries + containers + peer list |
+| **Best for** | Simple HA, no external DB | Best resilience at scale — single write path, no daemon reloads, CoreDNS cache fallback — _coming in Pro_ | Most robust community HA — resilient at every layer, survives extended outages without DA re-push |
 
 ---
 
@@ -258,7 +198,9 @@ Register each container as a separate Extra DNS server entry in DA → DNS Admin
 
 ### BIND9 vs CoreDNS MySQL — resource profile
 
-| | BIND9 (bundled) | CoreDNS + MySQL |
+> **CoreDNS MySQL is available in directdnsonly Pro.** The comparison below is provided as architectural context for sizing decisions.
+
+| | BIND9 (bundled) | CoreDNS + MySQL _(Pro)_ |
 |---|---|---|
 | **Base memory** | ~13–15 MB | ~20–30 MB (CoreDNS binary) + MySQL process |
 | **Per-zone overhead** | ~300 bytes per resource record in memory | Schema rows in MySQL; CoreDNS itself holds no zone state |
@@ -270,13 +212,13 @@ Register each container as a separate Extra DNS server entry in DA → DNS Admin
 | **Query throughput** | High — zones loaded into memory | Slightly lower — each query hits MySQL (mitigated by MySQL query cache / connection pooling) |
 | **Scale ceiling** | Degrades past ~1 000 zones: memory climbs, full reloads take 120 s+ | Scales with MySQL — thousands of zones with no DNS-process impact |
 
-**Rule of thumb:** Below ~300 zones BIND9 and CoreDNS MySQL are broadly comparable. Above ~500 zones, CoreDNS MySQL has a significant advantage because zone data lives entirely in the database — adding a new zone costs one MySQL INSERT, not a daemon reload.
+**Rule of thumb:** Below ~300 zones BIND9 and CoreDNS MySQL are broadly comparable. Above ~500 zones, CoreDNS MySQL has a significant advantage because zone data lives entirely in the database — adding a new zone costs one MySQL INSERT, not a daemon reload. CoreDNS MySQL is available in **directdnsonly Pro**.
 
 ---
 
 ### Bundled DNS daemons — NSD and BIND9
 
-The container image ships with **both NSD and BIND9** installed. The entrypoint reads your config and starts only the daemon that matches the configured backend type. CoreDNS MySQL deployments start neither.
+The container image ships with **both NSD and BIND9** installed. The entrypoint reads your config and starts only the daemon that matches the configured backend type.
 
 **NSD (Name Server Daemon)** from NLnet Labs is the default recommendation:
 
@@ -298,25 +240,20 @@ The container image ships with **both NSD and BIND9** installed. The entrypoint 
 
 **Summary recommendation:**
 
-- **Any scale, external DB available:** CoreDNS MySQL ([cybercinch fork](https://github.com/cybercinch/coredns_mysql_extend)) wins at every zone count. Connection pooling, JSON cache fallback, health monitoring, and zero-downtime operation during DB maintenance make it the most resilient choice regardless of size. No daemon reload ever needed — a zone write is a MySQL INSERT.
+- **Any scale, external DB available:** CoreDNS MySQL — the most resilient choice at any zone count. No daemon reload ever needed — a zone write is a MySQL INSERT. Available in **directdnsonly Pro**.
 - **No external DB, simplicity first:** NSD (bundled) — lightweight, fast, authoritative-only, same RFC 1035 zone file format as BIND.
 - **Need zero-interruption zone swaps:** Knot DNS (RCU — serves old zone to in-flight queries while atomically swapping in the new one).
 - **Need an HTTP API for zone management:** PowerDNS Authoritative with its native HTTP API.
 
-> **Note:** Knot DNS and PowerDNS backends are **not implemented** in directdnsonly — they are listed here as architectural context only. Implemented backends: `nsd`, `bind`, `coredns_mysql`. Pull requests for additional backends are welcome.
+> **Note:** Knot DNS and PowerDNS backends are **not implemented** in directdnsonly — they are listed here as architectural context only. Community backends: `nsd`, `bind`. CoreDNS MySQL is available in **directdnsonly Pro**. Pull requests for additional community backends are welcome.
 
 ---
 
-## CoreDNS MySQL Backend — Required Fork
+## CoreDNS MySQL Backend _(directdnsonly Pro)_
 
-The `coredns_mysql` backend writes zones to a MySQL database that CoreDNS reads
-at query time. **Vanilla CoreDNS with a stock MySQL plugin is not sufficient** —
-out of the box it does not act as a fully authoritative server, does not return
-NS records in the additional section, does not set the AA flag, and does not
-handle wildcard records.
+> **This backend is available in directdnsonly Pro.** The community edition ships with NSD and BIND9 backends only.
 
-This project is designed to work with a patched fork that resolves all of those
-issues and adds production-grade resilience:
+The `coredns_mysql` Pro backend writes zones to a MySQL database that CoreDNS reads at query time. **Vanilla CoreDNS with a stock MySQL plugin is not sufficient** — this project is designed to work with a patched fork that resolves authoritative-server correctness issues and adds production-grade resilience:
 
 **[cybercinch/coredns_mysql_extend](https://github.com/cybercinch/coredns_mysql_extend)**
 
@@ -330,14 +267,14 @@ issues and adds production-grade resilience:
 | **Health monitoring** | Continuous database health checks with configurable intervals |
 | **Zero downtime** | DNS continues serving during database maintenance windows |
 
-**Why this matters for Topology B:** directdnsonly's retry queue handles the write side during a MySQL outage — the CoreDNS fork handles the read side. Between them, neither writes nor queries are dropped during transient database failures.
+**Why this matters for Pro Topology B:** directdnsonly's retry queue handles the write side during a MySQL outage — the CoreDNS fork handles the read side. Between them, neither writes nor queries are dropped during transient database failures.
 
-Use the NSD or BIND backend if you want a zero-dependency setup with no custom CoreDNS build required.
+Use the NSD or BIND backend if you want a zero-dependency community setup with no custom CoreDNS build required.
 
 ---
 
 ## Features
-- Multi-backend DNS management (NSD, BIND, CoreDNS MySQL)
+- Multi-backend DNS management (NSD, BIND — CoreDNS MySQL available in Pro)
 - Parallel backend dispatch — all enabled backends updated simultaneously
 - Persistent queue — zone updates survive restarts
 - Automatic record-count verification and drift reconciliation
@@ -373,7 +310,7 @@ DirectAdmin zone push
                                          │
                                    ┌─────┴─────┐
                                    ▼           ▼
-                                 bind     coredns_dc1  ...
+                                 bind        nsd  ...
                                 (concurrent, as_completed)
 ```
 
@@ -403,7 +340,7 @@ DirectAdmin zone push
 
 ```
 INFO  | 📥 Batch started — 12 zone(s) queued for processing
-DEBUG | Processing example.com across 2 backends concurrently: bind, coredns_dc1
+DEBUG | Processing example.com across 2 backends concurrently: bind, nsd
 DEBUG | Parallel processing of example.com across 2 backends completed in 43ms
 SUCCESS | 📦 Batch complete — 12/12 zone(s) processed successfully in 1.8s (6.7 zones/sec)
 ```
@@ -418,12 +355,8 @@ dns:
   backends:
     bind:
       enabled: true
-    coredns_dc1:
+    nsd:
       enabled: true
-      host: "mysql-dc1"
-    coredns_dc2:
-      enabled: true        # adds a third parallel worker automatically
-      host: "mysql-dc2"
 ```
 
 ## Configuration
@@ -459,12 +392,19 @@ DirectDNSOnly uses [Vyper](https://github.com/sn3d/vyper-py) for configuration. 
 | `app.proxy_support` | `DADNS_APP_PROXY_SUPPORT` | `true` | Trust `X-Forwarded-For` from a reverse proxy |
 | `app.proxy_support_base` | `DADNS_APP_PROXY_SUPPORT_BASE` | `http://127.0.0.1` | Trusted proxy base address |
 
-#### Datastore (internal SQLite)
+#### Datastore (internal SQLite / MySQL)
 
 | Config key | Environment variable | Default | Description |
 |---|---|---|---|
-| `datastore.type` | `DADNS_DATASTORE_TYPE` | `sqlite` | Internal datastore type (only `sqlite` supported) |
-| `datastore.db_location` | `DADNS_DATASTORE_DB_LOCATION` | `data/directdns.db` | Path to the SQLite database file |
+| `datastore.type` | `DADNS_DATASTORE_TYPE` | `sqlite` | Internal datastore type (`sqlite` or `mysql`) |
+| `datastore.db_location` | `DADNS_DATASTORE_DB_LOCATION` | `data/directdns.db` | Path to the SQLite database file (sqlite only) |
+| `datastore.host` | `DADNS_DATASTORE_HOST` | `127.0.0.1` | MySQL host (mysql only) |
+| `datastore.port` | `DADNS_DATASTORE_PORT` | `3306` | MySQL port (mysql only) |
+| `datastore.name` | `DADNS_DATASTORE_NAME` | `directdnsonly` | MySQL database name (mysql only) |
+| `datastore.user` | `DADNS_DATASTORE_USER` | `directdnsonly` | MySQL username (mysql only) |
+| `datastore.pass` | `DADNS_DATASTORE_PASS` | _(empty)_ | MySQL password (mysql only) |
+
+> **Multi-node tip:** Use `datastore.type: mysql` with a shared MySQL instance when running multiple directdnsonly nodes in Topology C — the shared zone_data store means any node can heal any backend without relying on peer sync to have already delivered the zone_data.
 
 #### DNS backends — BIND
 
@@ -483,18 +423,7 @@ DirectDNSOnly uses [Vyper](https://github.com/sn3d/vyper-py) for configuration. 
 | `dns.backends.nsd.zones_dir` | `DADNS_DNS_BACKENDS_NSD_ZONES_DIR` | `/etc/nsd/zones` | Directory where zone files are written |
 | `dns.backends.nsd.nsd_conf` | `DADNS_DNS_BACKENDS_NSD_NSD_CONF` | `/etc/nsd/nsd.conf.d/zones.conf` | NSD zone include file managed by directdnsonly |
 
-#### DNS backends — CoreDNS MySQL
-
-The built-in env var mapping targets the backend named `coredns_mysql`. For multiple named CoreDNS backends (e.g. `coredns_dc1`, `coredns_dc2`) you must use a config file — see [Multi-backend via config file](#multi-backend-via-config-file) below.
-
-| Config key | Environment variable | Default | Description |
-|---|---|---|---|
-| `dns.backends.coredns_mysql.enabled` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_ENABLED` | `false` | Enable the CoreDNS MySQL backend |
-| `dns.backends.coredns_mysql.host` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_HOST` | `localhost` | MySQL host |
-| `dns.backends.coredns_mysql.port` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_PORT` | `3306` | MySQL port |
-| `dns.backends.coredns_mysql.database` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_DATABASE` | `coredns` | MySQL database name |
-| `dns.backends.coredns_mysql.username` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_USERNAME` | `coredns` | MySQL username |
-| `dns.backends.coredns_mysql.password` | `DADNS_DNS_BACKENDS_COREDNS_MYSQL_PASSWORD` | _(empty)_ | MySQL password |
+> **CoreDNS MySQL backend** (multi-DC fan-out, zero daemon reloads) is available in **directdnsonly Pro**.
 
 #### Reconciliation poller
 
@@ -619,26 +548,13 @@ volumes:
   ddo-data:
 ```
 
-#### Topology B — single CoreDNS MySQL backend (env vars only)
-
-```bash
-DADNS_APP_AUTH_PASSWORD=my-strong-secret
-DADNS_DNS_DEFAULT_BACKEND=coredns_mysql
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_ENABLED=true
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_HOST=mysql.dc1.internal
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_PORT=3306
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_DATABASE=coredns
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_USERNAME=coredns
-DADNS_DNS_BACKENDS_COREDNS_MYSQL_PASSWORD=db-secret
-DADNS_QUEUE_LOCATION=/app/data/queues
-DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
-```
+> **Topology B** (single directdnsonly instance fanning out to multiple CoreDNS MySQL backends across data centres) is available in **directdnsonly Pro**. Watch the repository for release announcements.
 
 ---
 
 ### Multi-backend via config file
 
-When you need **multiple named backends** (e.g. two CoreDNS MySQL instances in different data centres), **peer sync**, or **reconciliation with DA servers**, use a config file mounted at `/app/config/app.yml` (or `/etc/directdnsonly/app.yml`):
+When you need **multiple named backends**, **peer sync**, or **reconciliation with DA servers**, use a config file mounted at `/app/config/app.yml` (or `/etc/directdnsonly/app.yml`):
 
 ```yaml
 app:
@@ -646,25 +562,13 @@ app:
   auth_password: my-strong-secret   # or use DADNS_APP_AUTH_PASSWORD
 
 dns:
-  default_backend: coredns_dc1
+  default_backend: nsd
   backends:
-    coredns_dc1:
-      type: coredns_mysql
+    nsd:
+      type: nsd
       enabled: true
-      host: 10.0.0.80
-      port: 3306
-      database: coredns
-      username: coredns
-      password: db-secret-dc1
-
-    coredns_dc2:
-      type: coredns_mysql
-      enabled: true
-      host: 10.0.1.29
-      port: 3306
-      database: coredns
-      username: coredns
-      password: db-secret-dc2
+      zones_dir: /etc/nsd/zones
+      nsd_conf: /etc/nsd/nsd.conf.d/zones.conf
 
 reconciliation:
   enabled: true
