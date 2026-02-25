@@ -1,9 +1,8 @@
 FROM python:3.11.12-slim
 
 # Install system dependencies.
-# Both NSD and BIND are installed so the image works with any DNS backend type.
+# Both NSD and BIND are installed so the image works with either DNS backend type.
 # The entrypoint detects which one is configured and starts only that daemon.
-# CoreDNS MySQL users: neither daemon is started — the image is still usable.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bind9 \
     bind9utils \
@@ -11,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     gcc \
     python3-dev \
-    default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -44,7 +42,6 @@ COPY pyproject.toml poetry.lock README.md ./
 RUN pip install "poetry==2.1.2"
 
 COPY directdnsonly ./directdnsonly
-COPY schema ./schema
 
 RUN poetry config virtualenvs.create false && \
     poetry install
