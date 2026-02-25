@@ -62,93 +62,90 @@ class WorkerManager:
         logger.info("Save queue worker started")
         session = connect()
 
-        batch_start = None
-        batch_processed = 0
-        batch_failed = 0
-
         while self._running:
+            # Block until at least one item is available
             try:
                 item = self.save_queue.get(block=True, timeout=5)
-
-                if batch_start is None:
-                    batch_start = time.monotonic()
-                    batch_processed = 0
-                    batch_failed = 0
-                    pending = self.save_queue.qsize()
-                    logger.info(
-                        f"📥 Batch started — {pending + 1} zone(s) queued for processing"
-                    )
-
-                domain = item.get("domain", "unknown")
-                is_retry = item.get("source") in ("retry", "reconciler_heal")
-                target_backends = item.get("failed_backends")  # None = all backends
-
-                logger.debug(
-                    f"Processing zone update for {domain}"
-                    + (f" [retry #{item.get('retry_count', 0)}]" if is_retry else "")
-                    + (f" [backends: {target_backends}]" if target_backends else "")
-                )
-
-                if not is_retry and not check_zone_exists(domain):
-                    put_zone_index(domain, item.get("hostname"), item.get("username"))
-
-                if not all(k in item for k in ["domain", "zone_file"]):
-                    logger.error(f"Invalid queue item: {item}")
-                    self.save_queue.task_done()
-                    batch_failed += 1
-                    continue
-
-                backends = self.backend_registry.get_available_backends()
-                if target_backends:
-                    backends = {
-                        k: v for k, v in backends.items() if k in target_backends
-                    }
-                if not backends:
-                    logger.warning("No target backends available for this item!")
-                    self.save_queue.task_done()
-                    batch_failed += 1
-                    continue
-
-                if len(backends) > 1:
-                    failed = self._process_backends_parallel(backends, item, session)
-                else:
-                    failed = set()
-                    for backend_name, backend in backends.items():
-                        if not self._process_single_backend(
-                            backend_name, backend, item, session
-                        ):
-                            failed.add(backend_name)
-
-                if failed:
-                    self._schedule_retry(item, failed)
-                    batch_failed += 1
-                else:
-                    # Successful write — persist zone_data for Option C healing
-                    self._store_zone_data(session, domain, item["zone_file"])
-                    batch_processed += 1
-
-                self.save_queue.task_done()
-                logger.debug(f"Completed processing for {domain}")
-
             except Empty:
-                if batch_start is not None:
-                    elapsed = time.monotonic() - batch_start
-                    total = batch_processed + batch_failed
-                    rate = batch_processed / elapsed if elapsed > 0 else 0
-                    logger.success(
-                        f"📦 Batch complete — {batch_processed}/{total} zone(s) "
-                        f"processed successfully in {elapsed:.1f}s "
-                        f"({rate:.1f} zones/sec)"
-                        + (f", {batch_failed} failed" if batch_failed else "")
-                    )
-                    batch_start = None
-                    batch_processed = 0
-                    batch_failed = 0
                 continue
-            except Exception as e:
-                logger.error(f"Unexpected worker error: {e}")
-                batch_failed += 1
-                time.sleep(1)
+
+            # Open a batch and keep processing until the queue is empty
+            batch_start = time.monotonic()
+            batch_processed = 0
+            batch_failed = 0
+            logger.info("📥 Batch started")
+
+            while True:
+                try:
+                    domain = item.get("domain", "unknown")
+                    is_retry = item.get("source") in ("retry", "reconciler_heal")
+                    target_backends = item.get("failed_backends")  # None = all backends
+
+                    logger.debug(
+                        f"Processing zone update for {domain}"
+                        + (f" [retry #{item.get('retry_count', 0)}]" if is_retry else "")
+                        + (f" [backends: {target_backends}]" if target_backends else "")
+                    )
+
+                    if not is_retry and not check_zone_exists(domain):
+                        put_zone_index(domain, item.get("hostname"), item.get("username"))
+
+                    if not all(k in item for k in ["domain", "zone_file"]):
+                        logger.error(f"Invalid queue item: {item}")
+                        self.save_queue.task_done()
+                        batch_failed += 1
+                    else:
+                        backends = self.backend_registry.get_available_backends()
+                        if target_backends:
+                            backends = {
+                                k: v for k, v in backends.items() if k in target_backends
+                            }
+                        if not backends:
+                            logger.warning("No target backends available for this item!")
+                            self.save_queue.task_done()
+                            batch_failed += 1
+                        else:
+                            if len(backends) > 1:
+                                failed = self._process_backends_parallel(backends, item, session)
+                            else:
+                                failed = set()
+                                for backend_name, backend in backends.items():
+                                    if not self._process_single_backend(
+                                        backend_name, backend, item, session
+                                    ):
+                                        failed.add(backend_name)
+
+                            if failed:
+                                self._schedule_retry(item, failed)
+                                batch_failed += 1
+                            else:
+                                self._store_zone_data(session, domain, item["zone_file"])
+                                batch_processed += 1
+
+                            self.save_queue.task_done()
+                            logger.debug(f"Completed processing for {domain}")
+
+                except Exception as e:
+                    logger.error(f"Unexpected worker error processing {item.get('domain', '?')}: {e}")
+                    batch_failed += 1
+                    time.sleep(1)
+
+                # Check immediately for the next item — keep batch open while
+                # more work is queued; close it only when the queue is empty.
+                try:
+                    item = self.save_queue.get_nowait()
+                except Empty:
+                    break
+
+            elapsed = time.monotonic() - batch_start
+            total = batch_processed + batch_failed
+            rate = batch_processed / elapsed if elapsed > 0 else 0
+            logger.success(
+                f"📦 Batch complete — {batch_processed}/{total} zone(s) "
+                f"processed successfully in {elapsed:.1f}s "
+                f"({rate:.1f} zones/sec)"
+                + (f", {batch_failed} failed" if batch_failed else "")
+            )
 
     def _process_single_backend(self, backend_name, backend, item, session) -> bool:
         """Write a zone to one backend. Returns True on success, False on failure."""

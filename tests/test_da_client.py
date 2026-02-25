@@ -24,7 +24,9 @@ def _make_json_response(domains_list, total_pages=1):
 
 
 def _client():
-    return DirectAdminClient("da1.example.com", 2222, "admin", "secret", ssl=True, verify_ssl=True)
+    return DirectAdminClient(
+        "da1.example.com", 2222, "admin", "secret", ssl=True, verify_ssl=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +107,9 @@ def test_html_response_returns_none():
 
 
 def test_connection_error_returns_none():
-    with patch("requests.get", side_effect=requests.exceptions.ConnectionError("refused")):
+    with patch(
+        "requests.get", side_effect=requests.exceptions.ConnectionError("refused")
+    ):
         result = _client().list_domains()
 
     assert result is None
@@ -119,7 +123,9 @@ def test_timeout_returns_none():
 
 
 def test_ssl_error_returns_none():
-    with patch("requests.get", side_effect=requests.exceptions.SSLError("cert verify failed")):
+    with patch(
+        "requests.get", side_effect=requests.exceptions.SSLError("cert verify failed")
+    ):
         result = _client().list_domains()
 
     assert result is None
@@ -131,12 +137,16 @@ def test_ssl_error_returns_none():
 
 
 def test_parse_standard_querystring():
-    result = DirectAdminClient._parse_legacy_domain_list("list[]=example.com&list[]=test.com")
+    result = DirectAdminClient._parse_legacy_domain_list(
+        "list[]=example.com&list[]=test.com"
+    )
     assert result == {"example.com", "test.com"}
 
 
 def test_parse_newline_separated():
-    result = DirectAdminClient._parse_legacy_domain_list("list[]=example.com\nlist[]=test.com")
+    result = DirectAdminClient._parse_legacy_domain_list(
+        "list[]=example.com\nlist[]=test.com"
+    )
     assert result == {"example.com", "test.com"}
 
 

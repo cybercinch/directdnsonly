@@ -25,8 +25,8 @@ class Domain(Base):
     domain = Column(String(255), unique=True)
     hostname = Column(String(255))
     username = Column(String(255))
-    zone_data = Column(Text, nullable=True)          # last known zone file from DA
-    zone_updated_at = Column(DateTime, nullable=True) # when zone_data was last stored
+    zone_data = Column(Text, nullable=True)  # last known zone file from DA
+    zone_updated_at = Column(DateTime, nullable=True)  # when zone_data was last stored
 
     def __repr__(self):
         return "<Domain(id='%s', domain='%s', hostname='%s', username='%s')>" % (

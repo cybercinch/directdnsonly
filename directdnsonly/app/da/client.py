@@ -70,7 +70,13 @@ class DirectAdminClient:
                 if response is None:
                     return None
 
-                if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
+                if response.is_redirect or response.status_code in (
+                    301,
+                    302,
+                    303,
+                    307,
+                    308,
+                ):
                     if self._cookies:
                         logger.error(
                             f"[da:{self.hostname}] Still redirecting after session login — "

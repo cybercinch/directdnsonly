@@ -55,7 +55,9 @@ DA_CLIENT_PATH = "directdnsonly.app.reconciler.DirectAdminClient"
 
 def _patch_da(return_value):
     """Patch DirectAdminClient so list_domains returns a fixed value."""
-    return patch(DA_CLIENT_PATH, **{"return_value.list_domains.return_value": return_value})
+    return patch(
+        DA_CLIENT_PATH, **{"return_value.list_domains.return_value": return_value}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +235,12 @@ def test_heal_skips_domains_without_zone_data(delete_queue, patch_connect):
     registry, _ = _make_backend_registry(zone_exists_return=False)
 
     patch_connect.add(
-        Domain(domain="nodata.com", hostname="da1.example.com", username="admin", zone_data=None)
+        Domain(
+            domain="nodata.com",
+            hostname="da1.example.com",
+            username="admin",
+            zone_data=None,
+        )
     )
     patch_connect.commit()
 
