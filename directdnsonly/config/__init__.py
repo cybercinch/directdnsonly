@@ -47,14 +47,6 @@ def load_config() -> Vyper:
     v.set_default("dns.backends.nsd.zones_dir", "/etc/nsd/zones")
     v.set_default("dns.backends.nsd.nsd_conf", "/etc/nsd/nsd.conf.d/zones.conf")
 
-    v.set_default("dns.backends.coredns_mysql.enabled", False)
-    v.set_default("dns.backends.coredns_mysql.host", "localhost")
-    v.set_default("dns.backends.coredns_mysql.port", 3306)
-    v.set_default("dns.backends.coredns_mysql.database", "coredns")
-    v.set_default("dns.backends.coredns_mysql.username", "coredns")
-    v.set_default("dns.backends.coredns_mysql.password", "")
-    v.set_default("dns.backends.coredns_mysql.table_name", "records")
-
     # Set Defaults Datastore
     v.set_default("datastore.type", "sqlite")
     v.set_default("datastore.port", 3306)

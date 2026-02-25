@@ -1,34 +1,10 @@
 version: '3.8'
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: dadns_mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: coredns
-      MYSQL_USER: coredns
-      MYSQL_PASSWORD: coredns123
-    ports:
-      - "3306:3306"
-    volumes:
-      - ./schema/coredns_mysql.sql:/docker-entrypoint-initdb.d/init.sql
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   dadns:
     build:
-      dockerfile: Dockerfile.deepseek
       context: .
-      no_cache: false
     container_name: dadns_app
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "2222:2222"
     volumes:
@@ -40,13 +16,4 @@ services:
       - DNS_BACKENDS__BIND__ENABLED=true
       - DNS_BACKENDS__BIND__ZONES_DIR=/etc/named/zones/dadns
       - DNS_BACKENDS__BIND__NAMED_CONF=/etc/bind/named.conf.local
-      - DNS_BACKENDS__COREDNS_MYSQL__ENABLED=true
-      - DNS_BACKENDS__COREDNS_MYSQL__HOST=mysql
-      - DNS_BACKENDS__COREDNS_MYSQL__PORT=3306
-      - DNS_BACKENDS__COREDNS_MYSQL__DATABASE=coredns
-      - DNS_BACKENDS__COREDNS_MYSQL__USERNAME=coredns
-      - DNS_BACKENDS__COREDNS_MYSQL__PASSWORD=coredns123
     restart: unless-stopped
-
-volumes:
-  mysql_data:

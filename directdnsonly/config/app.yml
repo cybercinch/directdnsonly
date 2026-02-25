@@ -57,28 +57,14 @@ app:
 #      password: changeme
 
 dns:
-  default_backend: bind
   backends:
     bind:
       type: bind
       enabled: true
       zones_dir: ./data/zones
       named_conf: ./data/named.conf.include
-    coredns_dc1:
-      type: coredns_mysql
-      enabled: true
-      host: "mysql-dc1"
-      port: 3306
-      database: "coredns"
-      username: "coredns"
-      password: "coredns123"
-      table_name: "records"
-    coredns_dc2:
-      type: coredns_mysql
-      enabled: true
-      host: "mysql-dc2"
-      port: 3306
-      database: "coredns"
-      username: "coredns"
-      password: "coredns123"
-      table_name: "records"
+    # nsd:
+    #   type: nsd
+    #   enabled: false
+    #   zones_dir: /etc/nsd/zones
+    #   nsd_conf: /etc/nsd/nsd.conf.d/zones.conf
