@@ -69,6 +69,8 @@ def load_config() -> Vyper:
     # Peer sync defaults
     v.set_default("peer_sync.enabled", False)
     v.set_default("peer_sync.interval_minutes", 15)
+    v.set_default("peer_sync.auth_username", "peersync")
+    v.set_default("peer_sync.auth_password", "changeme")
 
     # Read configuration
     try:

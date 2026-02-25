@@ -7,13 +7,18 @@ from directdnsonly.app.db.models import Domain
 
 
 class InternalAPI:
-    """Peer-to-peer zone_data exchange endpoint.
+    """Peer-to-peer zone_data exchange endpoints.
 
     Used by PeerSyncWorker to replicate zone_data between directdnsonly
     instances so each node can independently heal its local backends.
 
-    All routes require the same basic auth as the main API.
+    All routes require peer_sync basic auth credentials, which are
+    configured separately from the main DirectAdmin-facing credentials
+    (peer_sync.auth_username / peer_sync.auth_password).
     """
+
+    def __init__(self, peer_syncer=None):
+        self._peer_syncer = peer_syncer
 
     @cherrypy.expose
     def zones(self, domain=None):
@@ -77,3 +82,15 @@ class InternalAPI:
             return json.dumps({"error": "internal server error"}).encode()
         finally:
             session.close()
+
+    @cherrypy.expose
+    def peers(self):
+        """Return the list of peer URLs this node knows about.
+
+        GET /internal/peers
+            Returns a JSON array of URL strings.  Used by other nodes during
+            sync to discover new cluster members (gossip-lite mesh expansion).
+        """
+        cherrypy.response.headers["Content-Type"] = "application/json"
+        urls = self._peer_syncer.get_peer_urls() if self._peer_syncer else []
+        return json.dumps(urls).encode()

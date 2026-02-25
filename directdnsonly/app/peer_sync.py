@@ -2,21 +2,34 @@
 """Peer sync worker — exchanges zone_data between directdnsonly instances.
 
 Each node stores zone_data in its local SQLite DB after every successful
-backend write.  When DirectAdmin pushes a zone to one node but the other
+backend write.  When DirectAdmin pushes a zone to one node but another
 is temporarily offline, the offline node misses that zone_data.
 
 PeerSyncWorker corrects this by periodically comparing zone lists with
-configured peers and fetching any zone_data that is newer or absent locally.
+all known peers and fetching any zone_data that is newer or absent locally.
 It only updates the local DB — it never writes directly to backends.  The
 existing reconciler healing pass then detects missing zones and re-pushes
 using the freshly synced zone_data.
 
+Mesh behaviour:
+- Each node exposes /internal/peers listing the URLs it knows about
+- During each sync pass, every peer is asked for its peer list; any URLs
+  not already known are added automatically (gossip-lite discovery)
+- A three-node cluster therefore only needs a linear chain of initial
+  connections — nodes propagate awareness of each other on the first pass
+
+Health tracking:
+- Consecutive failures per peer are counted; after FAILURE_THRESHOLD
+  misses the peer is marked degraded and a warning is logged once
+- On the next successful contact the peer is marked recovered
+
 Safety properties:
-- If a peer is unreachable, skip it silently and retry next interval
+- If a peer is unreachable, skip it and try next interval
 - Only zone_data is synced — backend writes remain the sole responsibility
   of the local save queue worker
 - Newer zone_updated_at timestamp wins; local data is never overwritten
   with older peer data
+- Peer discovery is best-effort and never fails a sync pass
 """
 import datetime
 import os
@@ -27,6 +40,9 @@ from sqlalchemy import select
 
 from directdnsonly.app.db import connect
 from directdnsonly.app.db.models import Domain
+
+# Consecutive failures before a peer is logged as degraded
+FAILURE_THRESHOLD = 3
 
 
 class PeerSyncWorker:
@@ -39,22 +55,55 @@ class PeerSyncWorker:
         self.interval_seconds = peer_sync_config.get("interval_minutes", 15) * 60
         self.peers = list(peer_sync_config.get("peers") or [])
 
-        # Support single-peer config via env vars for env-var-only deployments.
-        # DADNS_PEER_SYNC_PEER_URL, DADNS_PEER_SYNC_PEER_USERNAME, DADNS_PEER_SYNC_PEER_PASSWORD
-        env_url = os.environ.get("DADNS_PEER_SYNC_PEER_URL", "").strip()
-        if env_url and not any(p.get("url") == env_url for p in self.peers):
-            self.peers.append(
-                {
-                    "url": env_url,
-                    "username": os.environ.get(
-                        "DADNS_PEER_SYNC_PEER_USERNAME", "directdnsonly"
-                    ),
-                    "password": os.environ.get("DADNS_PEER_SYNC_PEER_PASSWORD", ""),
-                }
-            )
-            logger.debug(f"[peer_sync] Added peer from env vars: {env_url}")
+        # Per-peer health state: url -> {consecutive_failures, healthy, last_seen}
+        self._peer_health: dict = {}
+
+        # ----------------------------------------------------------------
+        # Env-var peer injection
+        # ----------------------------------------------------------------
+        # Original single-peer vars (backward compat):
+        #   DADNS_PEER_SYNC_PEER_URL / _USERNAME / _PASSWORD
+        # Numbered multi-peer vars (new):
+        #   DADNS_PEER_SYNC_PEER_1_URL / _USERNAME / _PASSWORD
+        #   DADNS_PEER_SYNC_PEER_2_URL / ...  (up to 9)
+        known_urls = {p.get("url") for p in self.peers}
+
+        env_candidates = []
+
+        single_url = os.environ.get("DADNS_PEER_SYNC_PEER_URL", "").strip()
+        if single_url:
+            env_candidates.append({
+                "url": single_url,
+                "username": os.environ.get("DADNS_PEER_SYNC_PEER_USERNAME", "peersync"),
+                "password": os.environ.get("DADNS_PEER_SYNC_PEER_PASSWORD", ""),
+            })
+
+        for i in range(1, 10):
+            numbered_url = os.environ.get(f"DADNS_PEER_SYNC_PEER_{i}_URL", "").strip()
+            if not numbered_url:
+                break
+            env_candidates.append({
+                "url": numbered_url,
+                "username": os.environ.get(
+                    f"DADNS_PEER_SYNC_PEER_{i}_USERNAME", "peersync"
+                ),
+                "password": os.environ.get(f"DADNS_PEER_SYNC_PEER_{i}_PASSWORD", ""),
+            })
+
+        for candidate in env_candidates:
+            if candidate["url"] not in known_urls:
+                self.peers.append(candidate)
+                known_urls.add(candidate["url"])
+                logger.debug(
+                    f"[peer_sync] Added peer from env vars: {candidate['url']}"
+                )
+
         self._stop_event = threading.Event()
         self._thread = None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def start(self):
         if not self.enabled:
@@ -86,6 +135,46 @@ class PeerSyncWorker:
     def is_alive(self):
         return self._thread is not None and self._thread.is_alive()
 
+    def get_peer_urls(self) -> list:
+        """Return the current list of known peer URLs.
+        Exposed via /internal/peers so other nodes can discover this node's mesh."""
+        return [p["url"] for p in self.peers if p.get("url")]
+
+    # ------------------------------------------------------------------
+    # Health tracking
+    # ------------------------------------------------------------------
+
+    def _health(self, url: str) -> dict:
+        return self._peer_health.setdefault(
+            url, {"consecutive_failures": 0, "healthy": True, "last_seen": None}
+        )
+
+    def _record_success(self, url: str):
+        h = self._health(url)
+        recovered = not h["healthy"]
+        h.update(
+            consecutive_failures=0,
+            healthy=True,
+            last_seen=datetime.datetime.utcnow(),
+        )
+        if recovered:
+            logger.info(f"[peer_sync] {url}: peer recovered")
+
+    def _record_failure(self, url: str, exc):
+        h = self._health(url)
+        h["consecutive_failures"] += 1
+        if h["healthy"] and h["consecutive_failures"] >= FAILURE_THRESHOLD:
+            h["healthy"] = False
+            logger.warning(
+                f"[peer_sync] {url}: marked degraded after {FAILURE_THRESHOLD} "
+                f"consecutive failures — {exc}"
+            )
+        else:
+            logger.debug(
+                f"[peer_sync] {url}: unreachable "
+                f"(failure #{h['consecutive_failures']}) — {exc}"
+            )
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -98,15 +187,49 @@ class PeerSyncWorker:
 
     def _sync_all(self):
         logger.debug(f"[peer_sync] Starting sync pass across {len(self.peers)} peer(s)")
-        for peer in self.peers:
+        # Iterate over a snapshot — _discover_peers_from may grow self.peers
+        for peer in list(self.peers):
             url = peer.get("url")
             if not url:
                 logger.warning("[peer_sync] Peer config missing url — skipping")
                 continue
             try:
                 self._sync_from_peer(peer)
+                self._discover_peers_from(peer)
+                self._record_success(url)
             except Exception as exc:
-                logger.warning(f"[peer_sync] Skipping unreachable peer {url}: {exc}")
+                self._record_failure(url, exc)
+
+    def _discover_peers_from(self, peer: dict):
+        """Fetch peer's known peer list and add any new nodes for mesh expansion.
+
+        This is best-effort — failures are silently swallowed so they never
+        interrupt the main sync pass."""
+        url = peer.get("url", "").rstrip("/")
+        username = peer.get("username")
+        password = peer.get("password")
+        auth = (username, password) if username else None
+        try:
+            resp = requests.get(f"{url}/internal/peers", auth=auth, timeout=5)
+            if resp.status_code != 200:
+                return
+            remote_urls = resp.json()  # list of URL strings
+            known_urls = {p.get("url") for p in self.peers}
+            for remote_url in remote_urls:
+                if remote_url and remote_url not in known_urls:
+                    # Inherit credentials from the introducing peer — in practice
+                    # all cluster nodes share the same peer_sync auth credentials.
+                    self.peers.append({
+                        "url": remote_url,
+                        "username": username,
+                        "password": password,
+                    })
+                    known_urls.add(remote_url)
+                    logger.info(
+                        f"[peer_sync] Discovered new peer {remote_url} via {url}"
+                    )
+        except Exception:
+            pass  # discovery is best-effort
 
     def _sync_from_peer(self, peer: dict):
         url = peer.get("url", "").rstrip("/")

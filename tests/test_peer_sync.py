@@ -79,6 +79,118 @@ def test_env_peer_not_duplicated_when_also_in_config(monkeypatch):
     assert urls.count("http://ddo-2:2222") == 1
 
 
+def test_numbered_env_peers(monkeypatch):
+    """DADNS_PEER_SYNC_PEER_1_URL and _2_URL add multiple peers."""
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_1_URL", "http://node-a:2222")
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_1_USERNAME", "peersync")
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_1_PASSWORD", "s3cr3t")
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_2_URL", "http://node-b:2222")
+    worker = PeerSyncWorker({"enabled": True})
+    urls = [p["url"] for p in worker.peers]
+    assert "http://node-a:2222" in urls
+    assert "http://node-b:2222" in urls
+    assert len(urls) == 2
+
+
+def test_numbered_env_peers_not_duplicated(monkeypatch):
+    """Numbered env var peers are deduplicated against the config file list."""
+    monkeypatch.setenv("DADNS_PEER_SYNC_PEER_1_URL", "http://ddo-2:2222")
+    worker = PeerSyncWorker(BASE_CONFIG)
+    urls = [p["url"] for p in worker.peers]
+    assert urls.count("http://ddo-2:2222") == 1
+
+
+def test_get_peer_urls():
+    worker = PeerSyncWorker(BASE_CONFIG)
+    assert worker.get_peer_urls() == ["http://ddo-2:2222"]
+
+
+# ---------------------------------------------------------------------------
+# Health tracking
+# ---------------------------------------------------------------------------
+
+
+def test_peer_health_starts_healthy():
+    worker = PeerSyncWorker(BASE_CONFIG)
+    h = worker._health("http://ddo-2:2222")
+    assert h["healthy"] is True
+    assert h["consecutive_failures"] == 0
+
+
+def test_record_failure_increments_count():
+    worker = PeerSyncWorker(BASE_CONFIG)
+    worker._record_failure("http://ddo-2:2222", ConnectionError("down"))
+    assert worker._health("http://ddo-2:2222")["consecutive_failures"] == 1
+    assert worker._health("http://ddo-2:2222")["healthy"] is True
+
+
+def test_record_failure_marks_degraded_at_threshold():
+    from directdnsonly.app.peer_sync import FAILURE_THRESHOLD
+    worker = PeerSyncWorker(BASE_CONFIG)
+    for _ in range(FAILURE_THRESHOLD):
+        worker._record_failure("http://ddo-2:2222", ConnectionError("down"))
+    assert worker._health("http://ddo-2:2222")["healthy"] is False
+
+
+def test_record_success_resets_health():
+    from directdnsonly.app.peer_sync import FAILURE_THRESHOLD
+    worker = PeerSyncWorker(BASE_CONFIG)
+    for _ in range(FAILURE_THRESHOLD):
+        worker._record_failure("http://ddo-2:2222", ConnectionError("down"))
+    assert not worker._health("http://ddo-2:2222")["healthy"]
+    worker._record_success("http://ddo-2:2222")
+    assert worker._health("http://ddo-2:2222")["healthy"] is True
+    assert worker._health("http://ddo-2:2222")["consecutive_failures"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Peer discovery (_discover_peers_from)
+# ---------------------------------------------------------------------------
+
+
+def test_discover_peers_adds_new_peer(monkeypatch):
+    """New peer URL returned by /internal/peers is added to the peer list."""
+    worker = PeerSyncWorker(BASE_CONFIG)
+
+    def mock_get(url, auth=None, timeout=10, params=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = ["http://node-c:2222"]
+        return resp
+
+    monkeypatch.setattr("directdnsonly.app.peer_sync.requests.get", mock_get)
+    worker._discover_peers_from(BASE_CONFIG["peers"][0])
+    urls = [p["url"] for p in worker.peers]
+    assert "http://node-c:2222" in urls
+
+
+def test_discover_peers_skips_known(monkeypatch):
+    """Already-known peer URLs are not re-added."""
+    worker = PeerSyncWorker(BASE_CONFIG)
+
+    def mock_get(url, auth=None, timeout=10, params=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = ["http://ddo-2:2222"]  # already known
+        return resp
+
+    monkeypatch.setattr("directdnsonly.app.peer_sync.requests.get", mock_get)
+    worker._discover_peers_from(BASE_CONFIG["peers"][0])
+    assert len(worker.peers) == 1  # unchanged
+
+
+def test_discover_peers_tolerates_failure(monkeypatch):
+    """Network error during discovery does not propagate."""
+    worker = PeerSyncWorker(BASE_CONFIG)
+
+    def mock_get(*args, **kwargs):
+        raise ConnectionError("peer down")
+
+    monkeypatch.setattr("directdnsonly.app.peer_sync.requests.get", mock_get)
+    # Should not raise
+    worker._discover_peers_from(BASE_CONFIG["peers"][0])
+
+
 def test_start_skips_when_disabled(caplog):
     worker = PeerSyncWorker({"enabled": False})
     worker.start()

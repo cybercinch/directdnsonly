@@ -90,6 +90,17 @@ def main():
         if config.get_string("app.log_level").upper() != "DEBUG":
             cherrypy.log.access_log.propagate = False
 
+        # Peer sync auth — separate credentials from the DA-facing API so a
+        # compromised peer node cannot push zones or access the admin endpoints.
+        peer_user_password_dict = {
+            config.get_string("peer_sync.auth_username"): config.get_string(
+                "peer_sync.auth_password"
+            )
+        }
+        peer_check_password = cherrypy.lib.auth_basic.checkpassword_dict(
+            peer_user_password_dict
+        )
+
         # Mount applications
         root = Root()
         root = DNSAdminAPI(
@@ -98,12 +109,17 @@ def main():
             backend_registry=registry,
         )
         root.health = HealthAPI(registry)
-        root.internal = InternalAPI()
+        root.internal = InternalAPI(peer_syncer=worker_manager._peer_syncer)
 
         # Add queue status endpoint
         root.queue_status = lambda: worker_manager.queue_status()
 
-        cherrypy.tree.mount(root, "/")
+        # Override auth for /internal so peers use their own credentials
+        cherrypy.tree.mount(root, "/", config={
+            "/internal": {
+                "tools.auth_basic.checkpassword": peer_check_password,
+            }
+        })
         cherrypy.engine.start()
         logger.success(f"Server started on port {config.get_int('app.listen_port')}")
 
