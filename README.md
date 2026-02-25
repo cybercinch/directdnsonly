@@ -65,7 +65,7 @@ dns:
 ```yaml
 services:
   directdnsonly-1:
-    image: guisea/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:2.5.0
     ports:
       - "2222:2222"   # DA pushes here
       - "53:53/udp"   # authoritative DNS
@@ -476,7 +476,7 @@ DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
 ```yaml
 services:
   directdnsonly-syd:
-    image: guisea/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:2.5.0
     ports:
       - "2222:2222"
       - "53:53/udp"
@@ -492,7 +492,7 @@ services:
       - syd-data:/app/data
 
   directdnsonly-mlb:
-    image: guisea/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:2.5.0
     ports:
       - "2223:2222"
       - "54:53/udp"
@@ -531,7 +531,7 @@ DADNS_DATASTORE_DB_LOCATION=/app/data/directdns.db
 ```yaml
 services:
   directdnsonly:
-    image: guisea/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:2.5.0
     ports:
       - "2222:2222"
       - "53:53/udp"

@@ -89,7 +89,7 @@ build:
 
 build-docker:
     export DOCKER_CONFIG="/home/guisea/.docker/guisea" && \
-    docker buildx build --platform linux/amd64,linux/arm64 -t guisea/directdnsonly:dev --push --progress plain --file Dockerfile .
+    docker buildx build --platform linux/amd64,linux/arm64 -t cybercinch/directdnsonly:dev --push --progress plain --file Dockerfile .
 # ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
