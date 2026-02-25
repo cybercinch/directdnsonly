@@ -36,3 +36,12 @@ pytest-mock = "^3.15.1"
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+tag_format = "v{version}"
+build_command = ""                  # container release — no sdist/wheel needed
+commit_message = "chore: release {version} 🔖"
+upload_to_pypi = false
+upload_to_vcs_release = true
+changelog_file = "CHANGELOG.md"
