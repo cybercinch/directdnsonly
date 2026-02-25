@@ -394,3 +394,53 @@ def test_sync_empty_peer_list(patch_connect, monkeypatch):
     monkeypatch.setattr("directdnsonly.app.peer_sync.requests.get", mock_get)
 
     worker._sync_from_peer(_make_peer())
+
+
+# ---------------------------------------------------------------------------
+# get_peer_status
+# ---------------------------------------------------------------------------
+
+
+def test_get_peer_status_no_contact_yet():
+    worker = PeerSyncWorker(BASE_CONFIG)
+    status = worker.get_peer_status()
+
+    assert status["enabled"] is True
+    assert status["total"] == 1
+    assert status["healthy"] == 1
+    assert status["degraded"] == 0
+    assert status["peers"][0]["url"] == "http://ddo-2:2222"
+    assert status["peers"][0]["healthy"] is True
+    assert status["peers"][0]["last_seen"] is None
+
+
+def test_get_peer_status_after_success():
+    worker = PeerSyncWorker(BASE_CONFIG)
+    worker._record_success("http://ddo-2:2222")
+    status = worker.get_peer_status()
+
+    assert status["healthy"] == 1
+    assert status["degraded"] == 0
+    assert status["peers"][0]["last_seen"] is not None
+
+
+def test_get_peer_status_after_degraded():
+    from directdnsonly.app.peer_sync import FAILURE_THRESHOLD
+
+    worker = PeerSyncWorker(BASE_CONFIG)
+    for _ in range(FAILURE_THRESHOLD):
+        worker._record_failure("http://ddo-2:2222", Exception("timeout"))
+
+    status = worker.get_peer_status()
+    assert status["healthy"] == 0
+    assert status["degraded"] == 1
+    assert status["peers"][0]["healthy"] is False
+
+
+def test_get_peer_status_disabled():
+    worker = PeerSyncWorker({})
+    status = worker.get_peer_status()
+
+    assert status["enabled"] is False
+    assert status["total"] == 0
+    assert status["peers"] == []

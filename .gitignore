@@ -26,3 +26,9 @@ build
 *.mypy_cache
 *.pytest_cache
 /data/*
+
+# Editor / tool settings — always local, never committed
+.vscode/
+.claude/
+.env
+*.env

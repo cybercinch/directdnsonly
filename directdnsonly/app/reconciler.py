@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import datetime
 import threading
 from loguru import logger
 from sqlalchemy import select
@@ -42,6 +43,17 @@ class ReconciliationWorker:
         self._initial_delay = reconciliation_config.get("initial_delay_minutes", 0) * 60
         self._stop_event = threading.Event()
         self._thread = None
+        self._last_run: dict = {}
+
+    def get_status(self) -> dict:
+        """Return reconciler configuration and last-run statistics."""
+        return {
+            "enabled": self.enabled,
+            "alive": self.is_alive,
+            "dry_run": self.dry_run,
+            "interval_minutes": self.interval_seconds // 60,
+            "last_run": dict(self._last_run),
+        }
 
     def start(self):
         if not self.enabled:
@@ -104,11 +116,18 @@ class ReconciliationWorker:
             self._reconcile_all()
 
     def _reconcile_all(self):
+        started_at = datetime.datetime.utcnow()
+        self._last_run = {"status": "running", "started_at": started_at.isoformat()}
         logger.info(
             f"[reconciler] Starting reconciliation pass across "
             f"{len(self.servers)} server(s)"
         )
         total_queued = 0
+        da_servers_polled = 0
+        da_servers_unreachable = 0
+        migrated = 0
+        backfilled = 0
+        zones_in_db = 0
 
         # Build a map of all domains seen on all DA servers: domain -> hostname
         all_da_domains: dict = {}
@@ -126,23 +145,26 @@ class ReconciliationWorker:
                     ssl=server.get("ssl", True),
                     verify_ssl=self.verify_ssl,
                 )
+                da_servers_polled += 1
                 da_domains = client.list_domains(ipp=self.ipp)
                 if da_domains is not None:
                     for d in da_domains:
                         all_da_domains[d] = hostname
+                else:
+                    da_servers_unreachable += 1
                 logger.debug(
                     f"[reconciler] {hostname}: "
                     f"{len(da_domains) if da_domains else 0} active domain(s) in DA"
                 )
             except Exception as exc:
                 logger.error(f"[reconciler] Unexpected error polling {hostname}: {exc}")
+                da_servers_unreachable += 1
 
         # Compare local DB against what DA reported; update masters and queue deletes
         session = connect()
         try:
             all_local_domains = session.execute(select(Domain)).scalars().all()
-            migrated = 0
-            backfilled = 0
+            zones_in_db = len(all_local_domains)
             known_servers = {s.get("hostname") for s in self.servers}
             for record in all_local_domains:
                 domain = record.domain
@@ -209,10 +231,31 @@ class ReconciliationWorker:
             )
 
         # Option C: heal backends that are missing zones
+        zones_healed = 0
         if self.save_queue is not None and self.backend_registry is not None:
-            self._heal_backends()
+            zones_healed = self._heal_backends()
 
-    def _heal_backends(self):
+        completed_at = datetime.datetime.utcnow()
+        self._last_run = {
+            "status": "ok",
+            "started_at": started_at.isoformat(),
+            "completed_at": completed_at.isoformat(),
+            "duration_seconds": round(
+                (completed_at - started_at).total_seconds(), 1
+            ),
+            "da_servers_polled": da_servers_polled,
+            "da_servers_unreachable": da_servers_unreachable,
+            "zones_in_da": len(all_da_domains),
+            "zones_in_db": zones_in_db,
+            "orphans_found": total_queued,
+            "orphans_queued": total_queued if not self.dry_run else 0,
+            "hostnames_backfilled": backfilled,
+            "hostnames_migrated": migrated,
+            "zones_healed": zones_healed,
+            "dry_run": self.dry_run,
+        }
+
+    def _heal_backends(self) -> int:
         """Check every backend for zone presence and re-queue any zone that is
         missing from one or more backends, using the stored zone_data as the
         authoritative source.  This corrects backends that missed pushes due to
@@ -220,9 +263,10 @@ class ReconciliationWorker:
         """
         backends = self.backend_registry.get_available_backends()
         if not backends:
-            return
+            return 0
 
         session = connect()
+        healed = 0
         try:
             domains = session.execute(
                     select(Domain).where(Domain.zone_data.isnot(None))
@@ -231,9 +275,7 @@ class ReconciliationWorker:
                 logger.debug(
                     "[reconciler] Healing pass: no zone_data stored yet — skipping"
                 )
-                return
-
-            healed = 0
+                return 0
             for record in domains:
                 missing = []
                 for backend_name, backend in backends.items():
@@ -277,3 +319,4 @@ class ReconciliationWorker:
                 )
         finally:
             session.close()
+        return healed

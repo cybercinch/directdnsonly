@@ -140,6 +140,30 @@ class PeerSyncWorker:
         Exposed via /internal/peers so other nodes can discover this node's mesh."""
         return [p["url"] for p in self.peers if p.get("url")]
 
+    def get_peer_status(self) -> dict:
+        """Return peer health summary for the /status endpoint."""
+        peers = []
+        for peer in self.peers:
+            url = peer.get("url", "")
+            h = self._peer_health.get(url, {})
+            last_seen = h.get("last_seen")
+            peers.append({
+                "url": url,
+                "healthy": h.get("healthy", True),
+                "consecutive_failures": h.get("consecutive_failures", 0),
+                "last_seen": last_seen.isoformat() if last_seen else None,
+            })
+        healthy = sum(1 for p in peers if p["healthy"])
+        return {
+            "enabled": self.enabled,
+            "alive": self.is_alive,
+            "interval_minutes": self.interval_seconds // 60,
+            "peers": peers,
+            "total": len(peers),
+            "healthy": healthy,
+            "degraded": len(peers) - healthy,
+        }
+
     # ------------------------------------------------------------------
     # Health tracking
     # ------------------------------------------------------------------

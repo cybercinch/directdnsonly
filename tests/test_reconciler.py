@@ -317,3 +317,83 @@ def test_heal_skipped_when_no_registry(delete_queue, patch_connect):
         w._reconcile_all()
 
     assert save_queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# get_status — last-run state
+# ---------------------------------------------------------------------------
+
+
+def test_get_status_before_any_run(worker):
+    status = worker.get_status()
+    assert status["enabled"] is True
+    assert status["alive"] is False
+    assert status["last_run"] == {}
+
+
+def test_get_status_after_run(worker, patch_connect):
+    with _patch_da(set()):
+        worker._reconcile_all()
+
+    s = worker.get_status()
+    assert s["enabled"] is True
+    lr = s["last_run"]
+    assert lr["status"] == "ok"
+    assert "started_at" in lr
+    assert "completed_at" in lr
+    assert "duration_seconds" in lr
+    assert lr["da_servers_polled"] == 1
+    assert lr["da_servers_unreachable"] == 0
+    assert lr["dry_run"] is False
+
+
+def test_get_status_counts_unreachable_server(worker, patch_connect):
+    with _patch_da(None):
+        worker._reconcile_all()
+
+    lr = worker.get_status()["last_run"]
+    assert lr["da_servers_polled"] == 1
+    assert lr["da_servers_unreachable"] == 1
+
+
+def test_get_status_counts_orphans(worker, delete_queue, patch_connect):
+    patch_connect.add(
+        Domain(domain="orphan.com", hostname="da1.example.com", username="admin")
+    )
+    patch_connect.commit()
+
+    with _patch_da(set()):
+        worker._reconcile_all()
+
+    lr = worker.get_status()["last_run"]
+    assert lr["orphans_found"] == 1
+    assert lr["orphans_queued"] == 1
+
+
+def test_get_status_dry_run_orphans_not_queued_in_stats(dry_run_worker, patch_connect):
+    patch_connect.add(
+        Domain(domain="orphan.com", hostname="da1.example.com", username="admin")
+    )
+    patch_connect.commit()
+
+    with _patch_da(set()):
+        dry_run_worker._reconcile_all()
+
+    lr = dry_run_worker.get_status()["last_run"]
+    assert lr["dry_run"] is True
+    assert lr["orphans_found"] == 1
+    assert lr["orphans_queued"] == 0
+
+
+def test_get_status_zones_in_db_counted(worker, patch_connect):
+    for d in ["a.com", "b.com", "c.com"]:
+        patch_connect.add(Domain(domain=d, hostname="da1.example.com", username="admin"))
+    patch_connect.commit()
+
+    with _patch_da({"a.com", "b.com", "c.com"}):
+        worker._reconcile_all()
+
+    lr = worker.get_status()["last_run"]
+    assert lr["zones_in_db"] == 3
+    assert lr["zones_in_da"] == 3
+    assert lr["orphans_found"] == 0

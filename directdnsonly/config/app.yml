@@ -3,6 +3,20 @@ timezone: Pacific/Auckland
 log_level: INFO
 queue_location: ./data/queues
 
+# Application datastore — stores domain index and zone_data for healing/peer-sync.
+# SQLite (default) requires no extra dependencies and is fine for single-node setups.
+# MySQL is recommended for multi-node deployments with a shared datastore.
+datastore:
+  type: sqlite
+  db_location: ./data/directdnsonly.db
+  # --- MySQL ---
+  # type: mysql
+  # host: "127.0.0.1"
+  # port: "3306"
+  # name: "directdnsonly"
+  # user: "directdnsonly"
+  # pass: "changeme"
+
 app:
   auth_username: directdnsonly
   auth_password: changeme  # Override via DADNS_APP_AUTH_PASSWORD env var

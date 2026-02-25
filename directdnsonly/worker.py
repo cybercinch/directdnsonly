@@ -43,6 +43,7 @@ class WorkerManager:
         self._peer_syncer = None
         self._reconciliation_config = reconciliation_config or {}
         self._peer_sync_config = peer_sync_config or {}
+        self._dead_letter_count = 0
 
         try:
             os.makedirs(queue_path, exist_ok=True)
@@ -205,6 +206,7 @@ class WorkerManager:
         Discards to dead-letter after MAX_RETRIES attempts."""
         retry_count = item.get("retry_count", 0) + 1
         if retry_count > MAX_RETRIES:
+            self._dead_letter_count += 1
             logger.error(
                 f"[retry] Dead-letter: {item['domain']} failed on "
                 f"{failed_backends} after {MAX_RETRIES} attempts — giving up"
@@ -496,18 +498,24 @@ class WorkerManager:
         logger.info("Workers stopped")
 
     def queue_status(self):
+        reconciler = (
+            self._reconciler.get_status()
+            if self._reconciler
+            else {"enabled": False, "alive": False, "last_run": {}}
+        )
+        peer_sync = (
+            self._peer_syncer.get_peer_status()
+            if self._peer_syncer
+            else {"enabled": False, "alive": False, "peers": [], "total": 0, "healthy": 0, "degraded": 0}
+        )
         return {
             "save_queue_size": self.save_queue.qsize(),
             "delete_queue_size": self.delete_queue.qsize(),
             "retry_queue_size": self.retry_queue.qsize(),
-            "save_worker_alive": self._save_thread and self._save_thread.is_alive(),
-            "delete_worker_alive": self._delete_thread
-            and self._delete_thread.is_alive(),
-            "retry_worker_alive": self._retry_thread and self._retry_thread.is_alive(),
-            "reconciler_alive": (
-                self._reconciler.is_alive if self._reconciler else False
-            ),
-            "peer_syncer_alive": (
-                self._peer_syncer.is_alive if self._peer_syncer else False
-            ),
+            "dead_letters": self._dead_letter_count,
+            "save_worker_alive": bool(self._save_thread and self._save_thread.is_alive()),
+            "delete_worker_alive": bool(self._delete_thread and self._delete_thread.is_alive()),
+            "retry_worker_alive": bool(self._retry_thread and self._retry_thread.is_alive()),
+            "reconciler": reconciler,
+            "peer_sync": peer_sync,
         }

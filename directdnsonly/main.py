@@ -4,6 +4,7 @@ from app.backends import BackendRegistry
 from app.api.admin import DNSAdminAPI
 from app.api.health import HealthAPI
 from app.api.internal import InternalAPI
+from app.api.status import StatusAPI
 from app import configure_logging
 from worker import WorkerManager
 from directdnsonly.config import config
@@ -110,8 +111,9 @@ def main():
         )
         root.health = HealthAPI(registry)
         root.internal = InternalAPI(peer_syncer=worker_manager._peer_syncer)
+        root.status = StatusAPI(worker_manager)
 
-        # Add queue status endpoint
+        # Add queue status endpoint (debug)
         root.queue_status = lambda: worker_manager.queue_status()
 
         # Override auth for /internal so peers use their own credentials

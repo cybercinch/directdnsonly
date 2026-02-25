@@ -38,4 +38,5 @@ def patch_connect(db_session, monkeypatch):
     monkeypatch.setattr("directdnsonly.app.utils.connect", _factory)
     monkeypatch.setattr("directdnsonly.app.reconciler.connect", _factory)
     monkeypatch.setattr("directdnsonly.app.peer_sync.connect", _factory)
+    monkeypatch.setattr("directdnsonly.app.api.status.connect", _factory)
     return db_session
