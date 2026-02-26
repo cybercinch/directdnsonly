@@ -21,6 +21,16 @@ app:
   auth_username: directdnsonly
   auth_password: changeme  # Override via DADNS_APP_AUTH_PASSWORD env var
 
+  # TLS — enable when running without a reverse proxy (bare-metal / VPS installs).
+  # For Let's Encrypt, ssl_cert should be fullchain.pem (cert + intermediates in
+  # one file) and ssl_bundle can be omitted.  For split cert/chain files, set
+  # ssl_bundle to the CA bundle path.
+  # Env vars: DADNS_APP_SSL_ENABLE, DADNS_APP_SSL_CERT, DADNS_APP_SSL_KEY, DADNS_APP_SSL_BUNDLE
+  #ssl_enable: true
+  #ssl_cert:   /etc/letsencrypt/live/ddo.example.com/fullchain.pem
+  #ssl_key:    /etc/letsencrypt/live/ddo.example.com/privkey.pem
+  #ssl_bundle: ""  # optional — leave blank when using fullchain.pem
+
 # Reconciliation poller — queries each DA server and removes orphaned zones
 # Disabled by default. Only touches zones registered via DaDNS (in our DB).
 # If a DA server is unreachable, that server is skipped entirely.

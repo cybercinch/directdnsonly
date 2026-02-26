@@ -78,14 +78,17 @@ def main():
         )
 
         if config.get_bool("app.ssl_enable"):
-            cherrypy.config.update(
-                {
-                    "server.ssl_module": "builtin",
-                    "server.ssl_certificate": config.get("app.ssl_cert"),
-                    "server.ssl_private_key": config.get("app.ssl_key"),
-                    "server.ssl_certificate_chain": config.get("ssl_bundle"),
-                }
-            )
+            ssl_conf = {
+                "server.ssl_module": "builtin",
+                "server.ssl_certificate": config.get("app.ssl_cert"),
+                "server.ssl_private_key": config.get("app.ssl_key"),
+            }
+            # ssl_bundle is optional — only needed when cert and chain are in
+            # separate files.  For Let's Encrypt fullchain.pem this is not required.
+            bundle = config.get("app.ssl_bundle")
+            if bundle:
+                ssl_conf["server.ssl_certificate_chain"] = bundle
+            cherrypy.config.update(ssl_conf)
 
         # cherrypy.log.error_log.propagate = False
         if config.get_string("app.log_level").upper() != "DEBUG":

@@ -119,6 +119,8 @@ Register both as separate server entries in DA → Server Manager → Multi Serv
 
 Three topologies to match your infrastructure.
 
+> **Universal note:** All topologies assume at least one instance remains available. If all instances are offline simultaneously, DNS resolution fails entirely — this is an infrastructure deployment problem, not a DirectDNSOnly problem. Deploy across independent providers, data centres, and network paths.
+
 ---
 
 ### Topology A — Dual Independent Instances
@@ -188,7 +190,7 @@ DirectAdmin Multi-Server
 **Why this is the most robust community topology:**
 - DA pushes to each instance independently — no single point of failure in the write path
 - If one instance misses a push while offline, peer sync recovers the zone from another instance automatically
-- If both instances are offline during a push, they sync from each other on recovery — no DA re-push needed
+- If both instances are offline during a push, DNS is down — this is a critical outage. Deploy instances across independent infrastructure to make this scenario effectively impossible
 - Reconciliation poller handles orphan zones independently on each instance
 
 **Failure behaviour**
@@ -300,8 +302,13 @@ Settings resolve in this order (highest wins):
 | `app.auth_username` | `DADNS_APP_AUTH_USERNAME` | `directdnsonly` | Basic auth username |
 | `app.auth_password` | `DADNS_APP_AUTH_PASSWORD` | `changeme` | Basic auth password — **always override in production** |
 | `app.listen_port` | `DADNS_APP_LISTEN_PORT` | `2222` | HTTP server port |
-| `app.ssl_enable` | `DADNS_APP_SSL_ENABLE` | `false` | Enable TLS |
+| `app.ssl_enable` | `DADNS_APP_SSL_ENABLE` | `false` | Enable TLS termination in the app |
+| `app.ssl_cert` | `DADNS_APP_SSL_CERT` | *(unset)* | Path to TLS certificate — use `fullchain.pem` for Let's Encrypt |
+| `app.ssl_key` | `DADNS_APP_SSL_KEY` | *(unset)* | Path to TLS private key |
+| `app.ssl_bundle` | `DADNS_APP_SSL_BUNDLE` | *(unset)* | Path to CA bundle — optional, omit when using `fullchain.pem` |
 | `app.proxy_support` | `DADNS_APP_PROXY_SUPPORT` | `true` | Trust `X-Forwarded-For` from reverse proxy |
+
+> **TLS modes:** for Docker/container deployments a reverse proxy (Caddy, Traefik, nginx) is the simplest way to handle TLS — leave `ssl_enable: false` and let the proxy terminate. For bare-metal or VPS installs without a proxy, set `ssl_enable: true` and provide `ssl_cert` + `ssl_key`. Both modes are fully supported.
 
 ### DNS backends — NSD
 
@@ -358,6 +365,17 @@ Community edition ships with NSD and BIND9 backends. Pro adds:
 - **Management UI** — browser-based configuration and status dashboard served from the same container
 
 Watch the repository or open an issue to register interest in the Pro beta.
+
+---
+
+## Community Edition vs Pro
+
+| | Container | Bare Metal |
+|---|---|---|
+| **Community** | `docker run` — works today, free | Python environment + NSD/BIND9 config — you're on your own |
+| **Pro** | `docker run` + Management UI + CoreDNS MySQL backend | Install script *(roadmap)* — handles Python, dependencies, and daemon config automatically |
+
+The container is the easiest path for community edition users — one `docker run` and DNS is serving. Bare metal community deployments are fully supported but require manual Python environment setup, dependency management, and DNS daemon configuration. Pro removes that friction with an install script for those who prefer bare metal or can't run Docker.
 
 ---
 
