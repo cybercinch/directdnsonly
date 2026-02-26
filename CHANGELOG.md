@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v2.7.0 (2026-02-26)
+
+### Features
+
+- Configurable TLS cert/key/bundle for bare-metal installs 🔐
+  ([`19b6f4b`](https://github.com/cybercinch/directdnsonly/commit/19b6f4b40c4afb497b04c611c26c8b87ff434d2d))
+
+Wires up ssl_cert, ssl_key, and ssl_bundle config keys that were previously broken (ssl_bundle had
+  missing app. namespace prefix). Adds config defaults, makes the CA bundle conditional so CherryPy
+  is not passed an empty path, and documents all four SSL settings in app.yml and README with a
+  proxy-vs-direct TLS callout.
+
+
 ## v2.6.1 (2026-02-26)
 
 ### Bug Fixes
