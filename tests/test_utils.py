@@ -9,6 +9,7 @@ from directdnsonly.app.utils import (
     get_domain_record,
     get_parent_domain_record,
     put_zone_index,
+    update_zone_hostname,
 )
 
 
@@ -136,3 +137,52 @@ def test_get_parent_domain_record_returns_parent(patch_connect):
 
 def test_get_parent_domain_record_single_label_returns_none(patch_connect):
     assert get_parent_domain_record("com") is None
+
+
+# ---------------------------------------------------------------------------
+# update_zone_hostname — DA server migration
+# ---------------------------------------------------------------------------
+
+
+def test_update_zone_hostname_transfers_ownership_same_user(patch_connect):
+    patch_connect.add(
+        Domain(domain="example.com", hostname="s24.example.com", username="admin")
+    )
+    patch_connect.commit()
+
+    update_zone_hostname("example.com", "s25.example.com", "admin")
+
+    record = patch_connect.query(Domain).filter_by(domain="example.com").first()
+    assert record.hostname == "s25.example.com"
+    assert record.username == "admin"
+
+
+def test_update_zone_hostname_transfers_ownership_different_user(patch_connect):
+    patch_connect.add(
+        Domain(domain="example.com", hostname="s24.example.com", username="admin")
+    )
+    patch_connect.commit()
+
+    update_zone_hostname("example.com", "s25.example.com", "admin2")
+
+    record = patch_connect.query(Domain).filter_by(domain="example.com").first()
+    assert record.hostname == "s25.example.com"
+    assert record.username == "admin2"
+
+
+def test_update_zone_hostname_same_server_is_noop(patch_connect):
+    patch_connect.add(
+        Domain(domain="example.com", hostname="s24.example.com", username="admin")
+    )
+    patch_connect.commit()
+
+    update_zone_hostname("example.com", "s24.example.com", "admin")
+
+    record = patch_connect.query(Domain).filter_by(domain="example.com").first()
+    assert record.hostname == "s24.example.com"
+
+
+def test_update_zone_hostname_nonexistent_zone_is_noop(patch_connect):
+    # Should not raise; zone simply isn't in DB yet
+    update_zone_hostname("new.com", "s25.example.com", "admin")
+    assert patch_connect.query(Domain).count() == 0

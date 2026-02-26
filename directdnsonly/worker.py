@@ -8,7 +8,7 @@ from persistqueue import Queue
 from persistqueue.exceptions import Empty
 from sqlalchemy import select
 
-from app.utils import check_zone_exists, put_zone_index
+from app.utils import check_zone_exists, put_zone_index, update_zone_hostname
 from app.utils.zone_parser import count_zone_records
 from directdnsonly.app.db.models import Domain
 from directdnsonly.app.db import connect
@@ -88,8 +88,11 @@ class WorkerManager:
                         + (f" [backends: {target_backends}]" if target_backends else "")
                     )
 
-                    if not is_retry and not check_zone_exists(domain):
-                        put_zone_index(domain, item.get("hostname"), item.get("username"))
+                    if not is_retry:
+                        if not check_zone_exists(domain):
+                            put_zone_index(domain, item.get("hostname"), item.get("username"))
+                        else:
+                            update_zone_hostname(domain, item.get("hostname"), item.get("username"))
 
                     if not all(k in item for k in ["domain", "zone_file"]):
                         logger.error(f"Invalid queue item: {item}")
@@ -308,8 +311,9 @@ class WorkerManager:
 
                 if record.hostname and record.hostname != hostname:
                     logger.warning(
-                        f"Hostname mismatch for {domain}: registered on "
-                        f"{record.hostname}, delete requested from {hostname} — rejected"
+                        f"[migration] Delete rejected for {domain}: zone is owned by "
+                        f"{record.hostname} but delete arrived from {hostname} — "
+                        f"did the old server remove the domain without checking 'Keep DNS'?"
                     )
                     self.delete_queue.task_done()
                     continue
