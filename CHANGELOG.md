@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v2.6.1 (2026-02-26)
+
+### Bug Fixes
+
+- Update Docker Hub password secret in release workflow :bug:
+  ([`49f3f90`](https://github.com/cybercinch/directdnsonly/commit/49f3f901c2eb56d89811afb6a1a0fa08fb9e2e49))
+
+
 ## v2.6.0 (2026-02-26)
 
 ### Bug Fixes
