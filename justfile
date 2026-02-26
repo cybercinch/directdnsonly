@@ -88,8 +88,27 @@ build:
     rm -f *.spec
 
 build-docker:
-    export DOCKER_CONFIG="/home/guisea/.docker/guisea" && \
+    export DOCKER_CONFIG="/home/guisea/.docker/cybercinch" && \
     docker buildx build --platform linux/amd64,linux/arm64 -t cybercinch/directdnsonly:dev --push --progress plain --file Dockerfile .
+
+build-docker-tagged tag:
+    export DOCKER_CONFIG="/home/guisea/.docker/cybercinch" && \
+    docker buildx build --platform linux/amd64,linux/arm64 \
+        -t cybercinch/directdnsonly:{{tag}} \
+        -t cybercinch/directdnsonly:latest \
+        --push --progress plain --file Dockerfile .
+
+# Build and push release image tagged with the version in pyproject.toml + :latest
+build-docker-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION=$(python3 -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
+    echo "Building cybercinch/directdnsonly:${VERSION} + :latest"
+    export DOCKER_CONFIG="/home/guisea/.docker/cybercinch"
+    docker buildx build --platform linux/amd64,linux/arm64 \
+        -t "cybercinch/directdnsonly:${VERSION}" \
+        -t cybercinch/directdnsonly:latest \
+        --push --progress plain --file Dockerfile .
 # ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
