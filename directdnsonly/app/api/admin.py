@@ -1,6 +1,7 @@
 import cherrypy
 from urllib.parse import urlencode, parse_qs
 from loguru import logger
+from directdnsonly.config import config
 from directdnsonly.app.utils import (
     check_zone_exists,
     check_parent_domain_owner,
@@ -121,8 +122,23 @@ class DNSAdminAPI:
                 }
             )
 
-        # parent match only
+        # Parent domain match.
+        # exists=2: basic check (DA 1.53.0) — parent in domainowners, no ownership data.
+        # exists=3: cluster check (DA 1.59.0+) — parent in cluster_domainowners, returns
+        #   hostname+username so the master can validate the requesting user owns the parent.
         parent_record = get_parent_domain_record(domain)
+        cluster_check = int(
+            config.get("app.check_subdomain_owner_in_cluster_domainowners") or 0
+        )
+        if cluster_check >= 1:
+            return urlencode(
+                {
+                    "error": 0,
+                    "exists": 3,
+                    "hostname": parent_record.hostname or "",
+                    "username": parent_record.username or "",
+                }
+            )
         return urlencode(
             {
                 "error": 0,

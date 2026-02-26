@@ -31,6 +31,15 @@ app:
   #ssl_key:    /etc/letsencrypt/live/ddo.example.com/privkey.pem
   #ssl_bundle: ""  # optional — leave blank when using fullchain.pem
 
+  # Subdomain ownership check for DNS cluster (DA 1.59.0+ feature).
+  # When enabled, the exists check returns exists=3 (with hostname+username) for
+  # parent domain matches, so the DA master can validate the requesting user owns
+  # the parent before allowing subdomain creation. Mirrors DA's
+  # check_subdomain_owner_in_cluster_domainowners setting.
+  # 0 = disabled (default), 1 = enabled
+  # Env var: DADNS_APP_CHECK_SUBDOMAIN_OWNER_IN_CLUSTER_DOMAINOWNERS
+  #check_subdomain_owner_in_cluster_domainowners: 1
+
 # Reconciliation poller — queries each DA server and removes orphaned zones
 # Disabled by default. Only touches zones registered via DaDNS (in our DB).
 # If a DA server is unreachable, that server is skipped entirely.

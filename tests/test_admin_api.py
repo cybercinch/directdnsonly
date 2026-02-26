@@ -91,6 +91,7 @@ def test_handle_exists_domain_found(api):
 
 
 def test_handle_exists_parent_found(api):
+    """exists=2 when check_subdomain_owner_in_cluster_domainowners is disabled."""
     parent = MagicMock()
     parent.hostname = "da2.example.com"
 
@@ -102,7 +103,9 @@ def test_handle_exists_parent_found(api):
         patch(
             "directdnsonly.app.api.admin.get_parent_domain_record", return_value=parent
         ),
+        patch("directdnsonly.app.api.admin.config") as mock_config,
     ):
+        mock_config.get.return_value = 0
         result = api._handle_exists(
             {
                 "action": "exists",
@@ -115,6 +118,38 @@ def test_handle_exists_parent_found(api):
     assert parsed["error"] == ["0"]
     assert parsed["exists"] == ["2"]
     assert "da2.example.com" in parsed["details"][0]
+
+
+def test_handle_exists_parent_found_cluster_check_enabled(api):
+    """exists=3 with hostname+username when check_subdomain_owner_in_cluster_domainowners=1."""
+    parent = MagicMock()
+    parent.hostname = "da2.example.com"
+    parent.username = "fred"
+
+    with (
+        patch("directdnsonly.app.api.admin.check_zone_exists", return_value=False),
+        patch(
+            "directdnsonly.app.api.admin.check_parent_domain_owner", return_value=True
+        ),
+        patch(
+            "directdnsonly.app.api.admin.get_parent_domain_record", return_value=parent
+        ),
+        patch("directdnsonly.app.api.admin.config") as mock_config,
+    ):
+        mock_config.get.return_value = 1
+        result = api._handle_exists(
+            {
+                "action": "exists",
+                "domain": "sub.example.com",
+                "check_for_parent_domain": "1",
+            }
+        )
+
+    parsed = parse_qs(result)
+    assert parsed["error"] == ["0"]
+    assert parsed["exists"] == ["3"]
+    assert parsed["hostname"] == ["da2.example.com"]
+    assert parsed["username"] == ["fred"]
 
 
 def test_handle_exists_no_parent_check_when_flag_absent(api):

@@ -1,10 +1,6 @@
 from vyper import v, Vyper
 from loguru import logger
-
-# from vyper.config import Config
-import os
 from pathlib import Path
-from typing import Any, Dict
 
 
 def load_config() -> Vyper:
@@ -34,6 +30,7 @@ def load_config() -> Vyper:
     v.set_default("app.ssl_cert", "")
     v.set_default("app.ssl_key", "")
     v.set_default("app.ssl_bundle", "")
+    v.set_default("app.check_subdomain_owner_in_cluster_domainowners", 0)
     v.set_default("app.listen_port", 2222)
     v.set_default("app.token_valid_for_days", 30)
     v.set_default("app.queue_location", "conf/queues")
