@@ -1,6 +1,33 @@
 # CHANGELOG
 
 
+## v2.8.0 (2026-02-27)
+
+### Bug Fixes
+
+- Default check_subdomain_owner_in_cluster_domainowners to 1 (on) ⚙️
+  ([`8092c9f`](https://github.com/cybercinch/directdnsonly/commit/8092c9ff516e1f80a31cfea4deaa94cd1f3429e5))
+
+Since DirectDNSOnly always stores hostname and username for every zone, exists=3 is strictly better
+  than exists=2. No reason to ship with the richer ownership check disabled.
+
+### Features
+
+- Add exists=3 cluster subdomain owner check (DA 1.59.0+) 🔍
+  ([`528786a`](https://github.com/cybercinch/directdnsonly/commit/528786a0542d62ac53e6d52e217014a5a912153e))
+
+Adds check_subdomain_owner_in_cluster_domainowners config toggle (default 0). When enabled, the
+  action=exists endpoint returns exists=3 with hostname+username for parent domain matches, allowing
+  the DA master to validate the requesting user owns the parent before permitting subdomain
+  creation. Mirrors the DA 1.59.0 cluster_domainowners feature. exists=2 (basic parent match, no
+  ownership data) is preserved as the default behaviour.
+
+Also removes unused imports from config/__init__.py.
+
+- Update README to reflect latest image tag and clarify DirectDNSOnly advantages
+  ([`be2c27f`](https://github.com/cybercinch/directdnsonly/commit/be2c27f1d81b3016512ffb5eec87191b0baf40cb))
+
+
 ## v2.7.0 (2026-02-26)
 
 ### Features
