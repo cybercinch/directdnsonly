@@ -10,10 +10,24 @@ docker run \
   -e DADNS_DNS_DEFAULT_BACKEND=nsd \
   -e DADNS_DNS_BACKENDS_NSD_ENABLED=true \
   -p 53:53/udp -p 2222:2222 \
-  cybercinch/directdnsonly:2.5.0
+  cybercinch/directdnsonly:latest
 ```
 
 Register the container's IP as a server in DA → Server Manager → Multi Server Setup → Add Server. Done.
+
+---
+
+## Why DirectDNSOnly Exists
+
+DirectDNSOnly exists to give DirectAdmin operators flexibility in how they run authoritative DNS — without being tied to a specific daemon, a full DA installation, or the complexity of AXFR zone transfers.
+
+DirectAdmin's traditional DNS replication options all come with constraints:
+
+**BIND + DirectSlave + AXFR** works until it doesn't — zone transfers are slow, silent failures leave secondaries serving stale data, and you're left managing NOTIFY configuration and serial tracking on top of everything else. It is also tightly coupled to BIND; changing backends means rebuilding the whole setup.
+
+**A DA Personal License as a secondary DNS server** is not purpose-built for this job. Every domain in your cluster becomes visible and editable from that server, it clutters DNS Administration, and you are running a full control panel just to serve zones.
+
+DirectDNSOnly takes a different approach. It impersonates a DirectAdmin Multi-Server node — DA pushes zone changes directly to it, no AXFR, no zone transfers, no secondary DA installation. The backend is pluggable: NSD, BIND9, or (with Pro) CoreDNS MySQL. Pick what fits your scale and infrastructure. No panel, no admin UI, no transfer rules, no clutter.
 
 ---
 
@@ -43,7 +57,7 @@ docker run -d \
   -p 53:53/udp \
   -p 2222:2222 \
   -v ddo-data:/app/data \
-  cybercinch/directdnsonly:2.5.0
+  cybercinch/directdnsonly:latest
 ```
 
 Register in DirectAdmin:
@@ -59,7 +73,7 @@ Register in DirectAdmin:
 ```yaml
 services:
   directdnsonly-1:
-    image: cybercinch/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:latest
     ports:
       - "53:53/udp"
       - "2222:2222"
@@ -77,7 +91,7 @@ services:
       - ddo1-data:/app/data
 
   directdnsonly-2:
-    image: cybercinch/directdnsonly:2.5.0
+    image: cybercinch/directdnsonly:latest
     ports:
       - "54:53/udp"
       - "2223:2222"
@@ -169,9 +183,13 @@ One directdnsonly instance writes to N CoreDNS MySQL databases in parallel acros
 
 ---
 
-### Topology C — Multi-Instance with Peer Sync *(Most Robust Community HA)*
+### Topology C — Multi-Instance with Peer Sync *(Most Robust HA)*
 
 Multiple independent instances, each with a local DNS backend, registered as separate servers. Peer sync provides eventual consistency — if one instance misses a DA push while offline, it recovers from a peer on the next sync interval.
+
+The DNS backend is not restricted — any instance can run NSD, BIND9, or (with Pro) CoreDNS MySQL. DA talks directly to each node independently, removing every single point of failure from the write path: no load balancer, no shared database between directdnsonly instances, no single component whose failure silences more than one node.
+
+NSD and BIND9 are solid choices at any scale. CoreDNS MySQL goes further — no daemon reloads when zones change, automatic JSON cache fallback if the database is briefly unavailable, and zone count is limited only by MySQL rather than process memory. The architecture is the same either way; CoreDNS MySQL is an upgrade, not a requirement.
 
 ```
 DirectAdmin Multi-Server
@@ -208,7 +226,7 @@ DirectAdmin Multi-Server
 
 | | Topology A — Dual NSD/BIND | Topology B — MySQL-backed *(Pro)* | Topology C — Multi-Instance + Peer Sync |
 |---|---|---|---|
-| **DNS server** | NSD or BIND9 | CoreDNS (reads MySQL) — *Pro* | NSD or BIND9 |
+| **DNS server** | NSD or BIND9 | CoreDNS (reads MySQL) — *Pro* | NSD or BIND9 (community) / CoreDNS MySQL *(Pro)* |
 | **Write path** | DA → each instance independently | DA → single instance → all backends — *Pro* | DA → each instance independently |
 | **Zone storage** | Zone files on disk | MySQL database — *Pro* | Zone files + SQLite zone_data store |
 | **Redundancy model** | Independent app+DNS units | One app, N database backends — *Pro* | Independent instances + peer sync |
@@ -216,7 +234,7 @@ DirectAdmin Multi-Server
 | **Prolonged outage recovery** | Waits for next DA push | Reconciler re-pushes all missing zones — *Pro* | Peer sync pulls missed zones from healthy peer |
 | **Cross-node consistency** | No sync | All backends share same write path — *Pro* | Peer sync (eventual consistency) |
 | **External DB required** | No | Yes (MySQL per CoreDNS node) — *Pro* | No |
-| **Best for** | Simple HA | Best resilience at scale — single write path, no daemon reloads | Most robust community HA |
+| **Best for** | Simple HA | Best resilience at scale — single write path, no daemon reloads | Most robust HA — no SPOF at any layer, peer sync recovers missed pushes automatically |
 
 ---
 
@@ -355,27 +373,28 @@ Peer sync uses **separate credentials** from the DA-facing API — keep them dis
 
 ---
 
-## directdnsonly Pro
-
-Community edition ships with NSD and BIND9 backends. Pro adds:
-
-- **CoreDNS MySQL backend** — zero daemon reloads, scales to thousands of zones, automatic JSON cache fallback during database outages
-- **Topology B** — single write path fanning out to N CoreDNS MySQL databases across multiple data centres
-- **Automatic DirectAdmin registration** — point Pro at DA with credentials and it configures itself as an additional DNS server, checks for existing domain conflicts, and triggers DA to push all zones. Zero console interaction required
-- **Management UI** — browser-based configuration and status dashboard served from the same container
-
-Watch the repository or open an issue to register interest in the Pro beta.
-
----
-
 ## Community Edition vs Pro
 
-| | Container | Bare Metal |
-|---|---|---|
-| **Community** | `docker run` — works today, free | Python environment + NSD/BIND9 config — you're on your own |
-| **Pro** | `docker run` + Management UI + CoreDNS MySQL backend | Install script *(roadmap)* — handles Python, dependencies, and daemon config automatically |
+Community edition is **feature complete**. It is not a trial or a lite version — it is the full DNS engine. If you are comfortable with Docker and environment variables, you need nothing else. The only thing it does not have is a UI.
 
-The container is the easiest path for community edition users — one `docker run` and DNS is serving. Bare metal community deployments are fully supported but require manual Python environment setup, dependency management, and DNS daemon configuration. Pro removes that friction with an install script for those who prefer bare metal or can't run Docker.
+| | Community | Pro *(in development)* |
+|---|---|---|
+| **NSD / BIND9 backends** | ✅ | ✅ |
+| **Persistent queue + retry** | ✅ | ✅ |
+| **Peer sync** | ✅ | ✅ |
+| **Reconciliation poller** | ✅ | ✅ |
+| **All config via env vars** | ✅ | ✅ |
+| **CoreDNS MySQL backend** | ❌ | ✅ optional |
+| **Topology B — multi-DC fan-out** | ❌ | ✅ |
+| **Setup wizard** | ❌ | ✅ |
+| **Management UI** — queues, workers, reconcilers, config | ❌ | ✅ |
+| **Cost** | Free | TBD |
+
+Pro is the same engine with a browser-based UI wrapped around it. It is aimed at DA operators who want DNS just working — without touching Docker, env vars, or yaml, and without accumulating ghost zones from deleted accounts and failed migrations that BIND will happily serve forever.
+
+The setup wizard handles everything: generates and maintains config, automatically registers the new nameserver with your participating DA nodes, checks for domain conflicts, and triggers DA to push all zones. The management UI gives you visibility into queues, workers and reconcilers without needing to read log files to know what is happening. The CoreDNS MySQL backend is also available for large-scale or multi-DC deployments.
+
+Open an issue to register interest in the Pro beta.
 
 ---
 
@@ -388,7 +407,7 @@ The container is the easiest path for community edition users — one `docker ru
 - [Loguru](https://github.com/Delgan/loguru) (logging)
 - [Vyper-py](https://github.com/sn3d/vyper-py) (configuration)
 
-Pro additionally uses [cybercinch/coredns_mysql_extend](https://github.com/cybercinch/coredns_mysql_extend) — a patched CoreDNS fork with correct AA flag handling, wildcard records, connection pooling, and automatic JSON cache fallback.
+Pro supports [cybercinch/coredns_mysql_extend](https://github.com/cybercinch/coredns_mysql_extend) as an optional backend — a patched CoreDNS fork with correct AA flag handling, wildcard records, connection pooling, and automatic JSON cache fallback.
 
 ---
 
