@@ -129,8 +129,11 @@ class ReconciliationWorker:
         backfilled = 0
         zones_in_db = 0
 
-        # Build a map of all domains seen on all DA servers: domain -> hostname
+        # Build a map of all domains seen on all DA servers: domain -> hostname.
+        # Also track any domain seen on more than one server — that signals a
+        # migration in progress and should be logged but not acted on.
         all_da_domains: dict = {}
+        seen_on: dict = {}  # domain -> set[hostname] for multi-server detection
         for server in self.servers:
             hostname = server.get("hostname")
             if not hostname:
@@ -149,6 +152,13 @@ class ReconciliationWorker:
                 da_domains = client.list_domains(ipp=self.ipp)
                 if da_domains is not None:
                     for d in da_domains:
+                        if d in all_da_domains and all_da_domains[d] != hostname:
+                            # Domain present on multiple servers — migration in flight
+                            seen_on.setdefault(d, {all_da_domains[d]}).add(hostname)
+                            logger.info(
+                                f"[migration] '{d}' found on multiple servers: "
+                                f"{seen_on[d]} — migration in progress, will not act"
+                            )
                         all_da_domains[d] = hostname
                 else:
                     da_servers_unreachable += 1
@@ -178,44 +188,52 @@ class ReconciliationWorker:
                         record.hostname = actual_master
                         backfilled += 1
                     elif actual_master != recorded_master:
-                        logger.warning(
-                            f"[reconciler] Domain '{domain}' migrated: "
-                            f"'{recorded_master}' -> '{actual_master}'. Updating local DB."
+                        # Master mismatch — the worker updates hostname on the next
+                        # zone push from the new server.  Just observe here.
+                        logger.info(
+                            f"[migration] '{domain}' recorded on {recorded_master} "
+                            f"but DA reports it on {actual_master} — "
+                            f"hostname will update when the new server next pushes"
                         )
-                        record.hostname = actual_master
                         migrated += 1
                 else:
-                    if recorded_master in known_servers:
-                        if self.dry_run:
-                            logger.warning(
-                                f"[reconciler] [DRY-RUN] Would delete orphan: {record.domain} "
-                                f"(master: {recorded_master})"
-                            )
-                        else:
-                            self.delete_queue.put(
-                                {
-                                    "domain": record.domain,
-                                    "hostname": record.hostname,
-                                    "username": record.username or "",
-                                    "source": "reconciler",
-                                }
-                            )
-                            logger.debug(
-                                f"[reconciler] Queued delete for orphan: {record.domain} "
-                                f"(master: {recorded_master})"
-                            )
+                    if recorded_master not in known_servers:
+                        logger.warning(
+                            f"[reconciler] Orphan '{domain}' is gone from DA but its "
+                            f"recorded master '{recorded_master}' is not in the configured "
+                            f"server list — skipping. Add it to reconciliation.directadmin_servers."
+                        )
+                    elif self.dry_run:
+                        logger.warning(
+                            f"[reconciler] [DRY-RUN] Would delete orphan: {record.domain} "
+                            f"(master: {recorded_master})"
+                        )
+                        total_queued += 1
+                    else:
+                        self.delete_queue.put(
+                            {
+                                "domain": record.domain,
+                                "hostname": record.hostname,
+                                "username": record.username or "",
+                                "source": "reconciler",
+                            }
+                        )
+                        logger.debug(
+                            f"[reconciler] Queued delete for orphan: {record.domain} "
+                            f"(master: {recorded_master})"
+                        )
                         total_queued += 1
 
-            if migrated or backfilled:
+            if backfilled:
                 session.commit()
-                if backfilled:
-                    logger.info(
-                        f"[reconciler] {backfilled} domain(s) had missing hostname backfilled."
-                    )
-                if migrated:
-                    logger.info(
-                        f"[reconciler] {migrated} domain(s) migrated to new master."
-                    )
+                logger.info(
+                    f"[reconciler] {backfilled} domain(s) had missing hostname backfilled."
+                )
+            if migrated:
+                logger.info(
+                    f"[reconciler] {migrated} domain(s) observed mid-migration — "
+                    f"no action taken, worker will update on next push."
+                )
         finally:
             session.close()
 

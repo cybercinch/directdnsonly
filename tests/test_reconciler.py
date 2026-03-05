@@ -133,7 +133,9 @@ def test_backfill_null_hostname(worker, patch_connect):
     assert record.hostname == "da1.example.com"
 
 
-def test_migration_updates_hostname(worker, patch_connect):
+def test_migration_logs_but_does_not_update_hostname(worker, patch_connect):
+    """Reconciler observes master mismatch and logs it — hostname update is
+    left to the worker, which updates on the next zone push from the new server."""
     patch_connect.add(
         Domain(domain="moved.com", hostname="da-old.example.com", username="admin")
     )
@@ -142,8 +144,9 @@ def test_migration_updates_hostname(worker, patch_connect):
     with _patch_da({"moved.com"}):
         worker._reconcile_all()
 
+    # hostname must NOT be updated by the reconciler
     record = patch_connect.query(Domain).filter_by(domain="moved.com").first()
-    assert record.hostname == "da1.example.com"
+    assert record.hostname == "da-old.example.com"
 
 
 def test_dry_run_still_backfills(dry_run_worker, patch_connect):

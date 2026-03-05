@@ -31,7 +31,9 @@ def _migrate(engine):
                     logger.warning(f"[db] Migration skipped ({table}.{column}): {exc}")
 
 
-def connect(dbtype="sqlite", **kwargs):
+def connect(dbtype=None, **kwargs):
+    if dbtype is None:
+        dbtype = v.get_string("datastore.type") or "sqlite"
     if dbtype == "sqlite":
         # Start SQLite engine
         db_location = v.get("datastore.db_location")
