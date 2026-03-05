@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v2.8.1 (2026-03-05)
+
+### Bug Fixes
+
+- Respect datastore.type config in connect(); fix reconciler migration logging 🗄️
+  ([`d92371b`](https://github.com/cybercinch/directdnsonly/commit/d92371be5f4e5fcb9594e1419df50027da319530))
+
+- connect() now reads datastore.type from config instead of hardcoding sqlite — MySQL datastore
+  config was silently ignored - Reconciler logs migration (zone on multiple servers, master
+  mismatch) but no longer updates hostname — worker handles that on next push - Reconciler warns
+  when orphan's recorded master is not in configured server list instead of silently skipping
+
+
 ## v2.8.0 (2026-02-27)
 
 ### Bug Fixes
