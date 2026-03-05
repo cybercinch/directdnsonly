@@ -17,6 +17,7 @@ def load_config() -> Vyper:
     v.automatic_env()
     # Set defaults for all required parameters
     v.set_default("log_level", "info")
+    v.set_default("log_format", "text")  # "text" or "json" (for log aggregators)
     v.set_default("queue_location", "./data/queues")
     v.set_default("timezone", "Pacific/Aucland")
 

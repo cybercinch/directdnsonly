@@ -1,6 +1,8 @@
 ---
 timezone: Pacific/Auckland
 log_level: INFO
+# log_format: text  # "text" (default) or "json" for Gravwell/log aggregators
+#                   # Env var: DADNS_LOG_FORMAT
 queue_location: ./data/queues
 
 # Application datastore — stores domain index and zone_data for healing/peer-sync.
