@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+## v2.9.0 (2026-03-05)
+
+### Features
+
+- Optional JSON log output for log aggregators (Gravwell etc.) 📋
+  ([`05f77d4`](https://github.com/cybercinch/directdnsonly/commit/05f77d45baa7560c7c4b08c5bd0dd3e81c2c1345))
+
+Add log_format config option ("text" default, "json" for structured logging). When enabled, loguru
+  serializes all output to JSON — both stderr and the rotating file sink. Configurable via
+  DADNS_LOG_FORMAT env var with no config file change required.
+
+
 ## v2.8.1 (2026-03-05)
 
 ### Bug Fixes
