@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v2.9.1 (2026-04-24)
+
+### Bug Fixes
+
+- **nsd**: Improve zone reload handling with reconfig retry logic
+  ([`f2838b9`](https://github.com/cybercinch/directdnsonly/commit/f2838b936f30dcd8e3c5df4aeb9466785fc7d951))
+
+
 ## v2.9.0 (2026-03-05)
 
 ### Features
