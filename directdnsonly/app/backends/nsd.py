@@ -99,29 +99,27 @@ class NSDBackend(DNSBackend):
             return False
 
     def reload_zone(self, zone_name: Optional[str] = None) -> bool:
+        cmd = ["nsd-control", "reload"] + ([zone_name] if zone_name else [])
         try:
-            if zone_name:
-                cmd = ["nsd-control", "reload", zone_name]
-                logger.debug(f"Reloading single zone: {zone_name}")
-            else:
-                cmd = ["nsd-control", "reload"]
-                logger.debug("Reloading all zones")
-
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             logger.debug(f"NSD reload successful: {result.stdout.strip()}")
             return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"NSD reload failed: {e.stderr.strip()}")
-            return False
+        except subprocess.CalledProcessError:
+            # Zone may not be in NSD's running config yet (new zone added to
+            # nsd.conf but reconfig not yet called).  Reconfig and retry once.
+            try:
+                subprocess.run(["nsd-control", "reconfig"], check=True,
+                            capture_output=True, timeout=15)
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                logger.debug(f"NSD reload successful after reconfig: {zone_name}")
+                return True
+            except subprocess.CalledProcessError as e:
+                logger.error(f"NSD reload failed: {e.stderr.strip()}")
+                return False
         except Exception as e:
             logger.error(f"Unexpected error during NSD reload: {e}")
             return False
+
 
     def zone_exists(self, zone_name: str) -> bool:
         exists = (self.zones_dir / f"{zone_name}.db").exists()
