@@ -8,8 +8,8 @@ from persistqueue import Queue
 from persistqueue.exceptions import Empty
 from sqlalchemy import select
 
-from app.utils import check_zone_exists, put_zone_index, update_zone_hostname
-from app.utils.zone_parser import count_zone_records
+from directdnsonly.app.utils import check_zone_exists, put_zone_index, update_zone_hostname
+from directdnsonly.app.utils.zone_parser import count_zone_records
 from directdnsonly.app.db.models import Domain
 from directdnsonly.app.db import connect
 from directdnsonly.app.reconciler import ReconciliationWorker
@@ -23,6 +23,11 @@ MAX_RETRIES = 5
 # Seconds to wait before each retry attempt (exponential-ish backoff)
 BACKOFF_SECONDS = [30, 120, 300, 900, 1800]  # 30s, 2m, 5m, 15m, 30m
 RETRY_DRAIN_INTERVAL = 30  # how often the retry drain thread wakes
+# After picking up the first queued item, wait this long before draining the
+# rest of the queue.  Gives burst items (e.g. multiple zones pushed from
+# DirectAdmin within the same second) time to land so they are all handled in
+# one batch instead of triggering separate 1/1 cycles.
+BATCH_DEBOUNCE_SECONDS = 0.5
 
 
 class WorkerManager:
@@ -69,6 +74,9 @@ class WorkerManager:
                 item = self.save_queue.get(block=True, timeout=5)
             except Empty:
                 continue
+
+            # Debounce: give burst items time to accumulate before draining.
+            time.sleep(BATCH_DEBOUNCE_SECONDS)
 
             # Open a batch and keep processing until the queue is empty
             batch_start = time.monotonic()
