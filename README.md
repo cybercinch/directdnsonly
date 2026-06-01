@@ -82,6 +82,7 @@ services:
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
       DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_SELF_URL: http://directdnsonly-1:2222
       DADNS_PEER_SYNC_AUTH_USERNAME: peersync
       DADNS_PEER_SYNC_AUTH_PASSWORD: peer-secret
       DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-2:2222
@@ -100,6 +101,7 @@ services:
       DADNS_DNS_DEFAULT_BACKEND: nsd
       DADNS_DNS_BACKENDS_NSD_ENABLED: "true"
       DADNS_PEER_SYNC_ENABLED: "true"
+      DADNS_PEER_SYNC_SELF_URL: http://directdnsonly-2:2222
       DADNS_PEER_SYNC_AUTH_USERNAME: peersync
       DADNS_PEER_SYNC_AUTH_PASSWORD: peer-secret
       DADNS_PEER_SYNC_PEER_URL: http://directdnsonly-1:2222
@@ -162,7 +164,7 @@ DirectAdmin Multi-Server
 | Scenario | What happens |
 |---|---|
 | One container down during DA push | That instance misses the update and serves stale data until the next DA push for that zone |
-| DNS daemon crashes, container stays up | Zone write lands in the persistent queue, replayed with backoff (30s → 2m → 5m → 15m → 30m, 5 attempts) |
+| DNS daemon crashes, container stays up | Zone write lands in the persistent queue; if the daemon reload fails, the zone is retried with backoff (30s → 2m → 5m → 15m → 30m, 5 attempts) |
 | Zone deleted from DA while instance was down | Reconciliation poller detects the orphan on the next pass and queues a delete |
 | Two instances diverge | No automatic cross-instance sync — drift persists until DA re-pushes the affected zone |
 
@@ -286,8 +288,9 @@ DirectAdmin zone push
 1. Single background thread drains the persistent queue — one zone at a time, in order
 2. Single backend: direct call, no thread overhead
 3. Multiple backends: parallel dispatch via ThreadPoolExecutor, slow or failing backends do not block others
-4. After each write, stored record count is verified against the DA zone — mismatches trigger automatic reconciliation
-5. Batch telemetry emitted on queue drain: zones processed, failures, elapsed time, throughput
+4. After each write, DNS daemon reload is issued (`nsd-control reload` / `rndc reload`) — a failed reload is treated as a backend failure and retried via the backoff queue
+5. After each successful write+reload, stored record count is verified against the DA zone — mismatches trigger automatic reconciliation
+6. Batch telemetry emitted on queue drain: zones processed, failures, elapsed time, throughput
 
 ```
 INFO  | 📥 Batch started — 12 zone(s) queued for processing
@@ -363,13 +366,16 @@ Peer sync uses **separate credentials** from the DA-facing API — keep them dis
 |---|---|---|---|
 | `peer_sync.enabled` | `DADNS_PEER_SYNC_ENABLED` | `false` | Enable peer sync |
 | `peer_sync.interval_minutes` | `DADNS_PEER_SYNC_INTERVAL_MINUTES` | `15` | Sync interval |
+| `peer_sync.self_url` | `DADNS_PEER_SYNC_SELF_URL` | *(unset)* | This node's own URL — excluded from peer discovery so nodes do not sync zone data from themselves. **Set this when peer sync is enabled.** |
 | `peer_sync.auth_username` | `DADNS_PEER_SYNC_AUTH_USERNAME` | `peersync` | Username this node accepts from peers |
 | `peer_sync.auth_password` | `DADNS_PEER_SYNC_AUTH_PASSWORD` | `changeme` | Password this node accepts from peers — **always override** |
-| `DADNS_PEER_SYNC_PEER_URL` | *(unset)* | Single peer URL (e.g. `http://ddo-2:2222`) |
-| `DADNS_PEER_SYNC_PEER_USERNAME` | `peersync` | Username sent to peer |
-| `DADNS_PEER_SYNC_PEER_PASSWORD` | *(empty)* | Password sent to peer |
+| *(env only)* | `DADNS_PEER_SYNC_PEER_URL` | *(unset)* | Single peer URL (e.g. `http://ddo-2:2222`) |
+| *(env only)* | `DADNS_PEER_SYNC_PEER_USERNAME` | `peersync` | Username sent to peer |
+| *(env only)* | `DADNS_PEER_SYNC_PEER_PASSWORD` | *(empty)* | Password sent to peer |
 
 > For multiple peers use a config file with the `peer_sync.peers` list.
+
+> **Why `self_url` matters:** each node advertises its known peer list at `/internal/peers`. Without `self_url`, a node receiving a peer list that includes its own URL will add itself as a new peer and periodically attempt to sync zone data from itself. Setting `self_url` prevents this at startup and filters any self-referencing URL discovered via gossip.
 
 ---
 
