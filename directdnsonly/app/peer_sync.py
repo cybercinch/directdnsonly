@@ -54,6 +54,21 @@ class PeerSyncWorker:
         self.enabled = peer_sync_config.get("enabled", False)
         self.interval_seconds = peer_sync_config.get("interval_minutes", 15) * 60
         self.peers = list(peer_sync_config.get("peers") or [])
+        self_url = (peer_sync_config.get("self_url") or "").rstrip("/")
+        self._self_url = self_url.lower() if self_url else None
+
+        if self._self_url:
+            before = len(self.peers)
+            self.peers = [
+                p for p in self.peers
+                if p.get("url", "").rstrip("/").lower() != self._self_url
+            ]
+            removed = before - len(self.peers)
+            if removed:
+                logger.warning(
+                    f"[peer_sync] Removed {removed} self-referencing peer entry(s) "
+                    f"matching self_url {self._self_url}"
+                )
 
         # Per-peer health state: url -> {consecutive_failures, healthy, last_seen}
         self._peer_health: dict = {}
@@ -240,7 +255,11 @@ class PeerSyncWorker:
             remote_urls = resp.json()  # list of URL strings
             known_urls = {p.get("url") for p in self.peers}
             for remote_url in remote_urls:
-                if remote_url and remote_url not in known_urls:
+                if not remote_url:
+                    continue
+                if self._self_url and remote_url.rstrip("/").lower() == self._self_url:
+                    continue
+                if remote_url not in known_urls:
                     # Inherit credentials from the introducing peer — in practice
                     # all cluster nodes share the same peer_sync auth credentials.
                     self.peers.append({

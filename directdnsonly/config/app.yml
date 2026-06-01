@@ -72,6 +72,9 @@ app:
 #peer_sync:
 #  enabled: true
 #  interval_minutes: 15
+#  self_url: https://ns1.example.com:2222  # This node's own URL — excluded from peer
+#                                           # discovery so nodes don't sync from themselves.
+#                                           # Env var: DADNS_PEER_SYNC_SELF_URL
 #  peers:
 #    - url: http://ddo-2:2222   # URL of the peer directdnsonly instance
 #      username: directdnsonly
