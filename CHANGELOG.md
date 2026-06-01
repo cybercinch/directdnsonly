@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v2.9.2 (2026-06-01)
+
+### Bug Fixes
+
+- **worker**: Add debounce to save queue so burst zones batch correctly :bug:
+  ([`6967617`](https://github.com/cybercinch/directdnsonly/commit/6967617520da55f75a70ff23b72a4dee89829eb2))
+
+Without a debounce, the save worker picked up the first queued item and immediately started
+  processing it. If backend writes completed before the next items arrived (common when backends are
+  fast), get_nowait() returned Empty and the batch closed at 1/1. Subsequent items each opened their
+  own single-item batch instead of being grouped with the burst.
+
+Adds BATCH_DEBOUNCE_SECONDS (default 0.5 s): after the blocking get() picks up the first item, the
+  worker sleeps briefly so burst items from DirectAdmin (multiple zones pushed within the same
+  second) can accumulate in the queue. The existing drain loop then processes them all in a single
+  batch.
+
+Also fixes short-form `from app.utils import …` to fully-qualified `from directdnsonly.app.utils
+  import …` so the module is importable without a sys.path hack, enabling the new test_worker.py
+  suite.
+
+- **worker, nsd, bind**: Improve zone reload logging and error handling
+  ([`10c8502`](https://github.com/cybercinch/directdnsonly/commit/10c8502b8209686dc1e20852f69347e189eb6224))
+
+
 ## v2.9.1 (2026-04-24)
 
 ### Bug Fixes
