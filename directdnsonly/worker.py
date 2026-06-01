@@ -168,9 +168,13 @@ class WorkerManager:
                     backend.update_named_conf(
                         [d.domain for d in session.execute(select(Domain)).scalars().all()]
                     )
-                    backend.reload_zone()
+                    if not backend.reload_zone():
+                        logger.warning(f"BIND reload failed for {item['domain']} in {backend_name}")
+                        return False
                 else:
-                    backend.reload_zone(zone_name=item["domain"])
+                    if not backend.reload_zone(zone_name=item["domain"]):
+                        logger.warning(f"NSD reload failed for {item['domain']} in {backend_name}")
+                        return False
                 self._verify_backend_record_count(
                     backend_name, backend, item["domain"], item["zone_file"]
                 )
@@ -397,9 +401,13 @@ class WorkerManager:
                 logger.debug(f"Deleted {domain} from {backend_name}")
                 if backend.get_name() == "bind":
                     backend.update_named_conf(remaining_domains)
-                    backend.reload_zone()
+                    if not backend.reload_zone():
+                        logger.warning(f"BIND reload failed after deleting {domain} in {backend_name}")
+                        return False
                 else:
-                    backend.reload_zone(zone_name=domain)
+                    if not backend.reload_zone(zone_name=domain):
+                        logger.warning(f"NSD reload failed after deleting {domain} in {backend_name}")
+                        return False
                 return True
             else:
                 logger.error(f"Failed to delete {domain} from {backend_name}")

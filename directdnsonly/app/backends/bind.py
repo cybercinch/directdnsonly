@@ -84,10 +84,8 @@ class BINDBackend(DNSBackend):
         try:
             if zone_name:
                 cmd = ["rndc", "reload", zone_name]
-                logger.debug(f"Reloading single zone: {zone_name}")
             else:
                 cmd = ["rndc", "reload"]
-                logger.debug("Reloading all zones")
 
             result = subprocess.run(
                 cmd,
@@ -96,7 +94,7 @@ class BINDBackend(DNSBackend):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            logger.debug(f"BIND reload successful: {result.stdout}")
+            logger.info(f"BIND reload successful: {result.stdout.strip() or zone_name or 'all zones'}")
             return True
         except subprocess.CalledProcessError as e:
             logger.error(f"BIND reload failed: {e.stderr}")

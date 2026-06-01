@@ -39,7 +39,7 @@ def _fast_backend() -> MagicMock:
     b = MagicMock()
     b.write_zone.return_value = True
     b.get_name.return_value = "mock"
-    b.reload_zone.return_value = None
+    b.reload_zone.return_value = True
     b.verify_zone_record_count.side_effect = NotImplementedError
     return b
 
