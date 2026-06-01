@@ -102,7 +102,7 @@ class NSDBackend(DNSBackend):
         cmd = ["nsd-control", "reload"] + ([zone_name] if zone_name else [])
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            logger.debug(f"NSD reload successful: {result.stdout.strip()}")
+            logger.info(f"NSD reload successful: {result.stdout.strip() or zone_name or 'all zones'}")
             return True
         except subprocess.CalledProcessError:
             # Zone may not be in NSD's running config yet (new zone added to
@@ -111,7 +111,7 @@ class NSDBackend(DNSBackend):
                 subprocess.run(["nsd-control", "reconfig"], check=True,
                             capture_output=True, timeout=15)
                 subprocess.run(cmd, check=True, capture_output=True, text=True)
-                logger.debug(f"NSD reload successful after reconfig: {zone_name}")
+                logger.info(f"NSD reload successful after reconfig: {zone_name}")
                 return True
             except subprocess.CalledProcessError as e:
                 logger.error(f"NSD reload failed: {e.stderr.strip()}")
