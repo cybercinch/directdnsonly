@@ -1,6 +1,6 @@
 [project]
 name = "directdnsonly"
-version = "2.9.2"
+version = "2.10.0"
 description = "DNS Management System - DirectAdmin to multiple backends"
 authors = [
     {name = "Aaron Guise",email = "aaron@guise.net.nz"}
@@ -24,6 +24,7 @@ dependencies = [
 dadns = "directdnsonly.__main__:run"
 
 
+
 [tool.poetry]
 package-mode = true
 
@@ -43,6 +44,7 @@ commit_message = "chore: release {version} 🔖"
 upload_to_pypi = false
 upload_to_vcs_release = true
 changelog_file = "CHANGELOG.md"
+
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

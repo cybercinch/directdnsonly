@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v2.10.0 (2026-06-02)
+
+### Documentation
+
+- **README**: Add self URL configuration for peer sync to prevent self-referencing 📝
+  ([`6d8485c`](https://github.com/cybercinch/directdnsonly/commit/6d8485c9b6a79e638df4d56daa8281691d44d6dc))
+
+### Features
+
+- **config**: Add self_url configuration to exclude self-referencing peers
+  ([`f4fb65b`](https://github.com/cybercinch/directdnsonly/commit/f4fb65b481dbe35325020e5e98024bfde1e17050))
+
+
 ## v2.9.2 (2026-06-01)
 
 ### Bug Fixes
